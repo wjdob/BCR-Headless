@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    SPDX-FileCopyrightText: 2026 Andrew Gunnerson
+    SPDX-License-Identifier: GPL-3.0-only
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+         The release APK is no longer installed as a package. It is only a code
+         container for the headless daemon launched with app_process, so strip
+         package-facing permissions and components from the shipped artifact.
+    -->
+    <uses-permission
+        android:name="android.permission.CAPTURE_AUDIO_OUTPUT"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.CONTROL_INCALL_EXPERIENCE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.RECORD_AUDIO"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.READ_CONTACTS"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.POST_NOTIFICATIONS"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.READ_CALL_LOG"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.READ_PHONE_STATE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.VIBRATE"
+        tools:node="remove" />
+
+    <application
+        android:name="android.app.Application"
+        tools:replace="android:name">
+
+        <!-- No launcher, service, receiver, or provider components remain in the
+             release helper APK. The daemon entrypoint is invoked directly by the
+             module scripts through app_process. -->
+        <service
+            android:name=".NotificationActionService"
+            tools:node="remove" />
+
+        <receiver
+            android:name=".DirectBootMigrationReceiver"
+            tools:node="remove" />
+
+        <service
+            android:name=".DirectBootMigrationService"
+            tools:node="remove" />
+
+        <service
+            android:name=".RecorderInCallService"
+            tools:node="remove" />
+
+        <service
+            android:name=".RecorderTileService"
+            tools:node="remove" />
+
+        <provider
+            android:name=".RecorderProvider"
+            tools:node="remove" />
+
+        <activity
+            android:name=".settings.SettingsActivity"
+            tools:node="remove" />
+
+        <activity-alias
+            android:name=".settings.SettingsActivityLauncher"
+            tools:node="remove" />
+
+        <receiver
+            android:name=".settings.DialerCodeReceiver"
+            tools:node="remove" />
+
+        <activity
+            android:name=".rule.PickContactGroupActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name=".rule.RecordRulesActivity"
+            tools:node="remove" />
+
+    </application>
+</manifest>

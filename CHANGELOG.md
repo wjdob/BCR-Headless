@@ -9,7 +9,16 @@
 
 ### Unreleased
 
-### Version 2.7
+### Version 1.0.0
+
+This is the first standalone BCR Headless release.
+
+* Rebuild the project as a headless Magisk/KernelSU module with a module WebUI
+* Move recording control, runtime status, and recorded-call history into the module UI
+* Preserve upstream BCR history below for attribution and historical reference
+  * Versions 2.7 and earlier describe upstream BCR releases, not the headless rebuild
+
+### Version 2.7 (Original BCR Changelog history)
 
 * Update Chinese translations ([PR #827 @lofx-lee])
 * Improve workaround for Android binder bug to work in more situations ([Issue #819], [PR #828 @chenxiaolong])

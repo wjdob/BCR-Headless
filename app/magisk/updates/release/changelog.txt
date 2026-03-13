@@ -1,1 +1,8 @@
-The changelog can be found at: [`CHANGELOG.md`](https://github.com/chenxiaolong/BCR/blob/master/CHANGELOG.md).
+BCR Headless 1.0.0
+
+- First standalone headless rebuild release
+- Magisk and KernelSU module with KSUWebUI-compatible configuration
+- Recording log, output-folder/file open actions, and debug runtime view
+- Headless architecture designed to avoid the old system-app visibility
+
+Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.0.0/CHANGELOG.md

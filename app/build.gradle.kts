@@ -1,14 +1,13 @@
 /*
  * SPDX-FileCopyrightText: 2022-2026 Andrew Gunnerson
  * SPDX-FileCopyrightText: 2023 Patryk Miś
+ * SPDX-FileCopyrightText: 2026 wjdob
  * SPDX-License-Identifier: GPL-3.0-only
  */
 
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.VariantOutputConfiguration
-import org.eclipse.jgit.api.ArchiveCommand
 import org.eclipse.jgit.api.Git
-import org.eclipse.jgit.archive.TarFormat
 import org.eclipse.jgit.lib.ObjectId
 import org.gradle.kotlin.dsl.support.uppercaseFirstChar
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -29,7 +28,6 @@ java {
 buildscript {
     dependencies {
         classpath(libs.jgit)
-        classpath(libs.jgit.archive)
         classpath(libs.json)
     }
 }
@@ -61,60 +59,44 @@ fun describeVersion(git: Git): VersionTriple {
     }
 }
 
-fun getVersionCode(triple: VersionTriple): Int {
-    val tag = triple.first
-    val (major, minor) = if (tag != null) {
-        if (!tag.startsWith('v')) {
-            throw IllegalArgumentException("Tag does not begin with 'v': $tag")
-        }
-
-        val pieces = tag.substring(1).split('.')
-        if (pieces.size != 2) {
-            throw IllegalArgumentException("Tag is not in the form 'v<major>.<minor>': $tag")
-        }
-
-        Pair(pieces[0].toInt(), pieces[1].toInt())
-    } else {
-        Pair(0, 0)
-    }
-
-    // 8 bits for major version, 8 bits for minor version, and 8 bits for git commit count
-    assert(major in 0 until 1.shl(8))
-    assert(minor in 0 until 1.shl(8))
-    assert(triple.second in 0 until 1.shl(8))
-
-    return major.shl(16) or minor.shl(8) or triple.second
+fun getVersionCode(major: Int, minor: Int, patch: Int, commitCount: Int): Int {
+    // The headless rebuild intentionally uses its own version line instead of
+    // inheriting the fork history's release tags. That keeps published versions
+    // honest about this project's architectural reset. The visible version name
+    // is plain semver, while the low digits of versionCode still advance with
+    // the current revision so local update testing keeps working.
+    return major * 1_000_000 + minor * 10_000 + patch * 100 + commitCount.coerceAtMost(99)
 }
 
-fun getVersionName(git: Git, triple: VersionTriple): String {
-    val tag = triple.first?.replace(Regex("^v"), "") ?: "NONE"
-
-    return buildString {
-        append(tag)
-
-        if (triple.second > 0) {
-            append(".r")
-            append(triple.second)
-
-            append(".g")
-            git.repository.newObjectReader().use {
-                append(it.abbreviate(triple.third).name())
-            }
-        }
-    }
+fun getVersionName(major: Int, minor: Int, patch: Int): String {
+    return "$major.$minor.$patch"
 }
 
 val git = Git.open(File(rootDir, ".git"))!!
 val gitVersionTriple = describeVersion(git)
-val gitVersionCode = getVersionCode(gitVersionTriple)
-val gitVersionName = getVersionName(git, gitVersionTriple)
+val projectVersionMajor = 1
+val projectVersionMinor = 0
+val projectVersionPatch = 0
+val gitVersionCode = getVersionCode(
+    projectVersionMajor,
+    projectVersionMinor,
+    projectVersionPatch,
+    gitVersionTriple.second,
+)
+val gitVersionName = getVersionName(projectVersionMajor, projectVersionMinor, projectVersionPatch)
 
-val projectUrl = "https://github.com/chenxiaolong/BCR"
-val releaseMetadataBranch = "master"
+val projectUrl = providers.gradleProperty("projectUrl")
+    .orElse("https://github.com/wjdob/BCR-Headless")
+    .get()
+val releaseMetadataBranch = providers.gradleProperty("releaseMetadataBranch")
+    .orElse("main")
+    .get()
+val moduleId = "bcr.headless"
+val moduleName = "BCR Headless"
+val releaseKeystore = providers.environmentVariable("RELEASE_KEYSTORE").orNull
+val hasCustomReleaseSigning = !releaseKeystore.isNullOrBlank()
 
 val extraDir = layout.buildDirectory.map { it.dir("extra") }
-val archiveDir = extraDir.map { it.dir("archive") }
-
 android {
     namespace = "com.chiller3.bcr"
 
@@ -122,7 +104,10 @@ android {
     buildToolsVersion = "36.0.0"
 
     defaultConfig {
-        applicationId = "com.chiller3.bcr"
+        // The helper APK is no longer installed as a package. It only provides
+        // code for the headless daemon launched from the module directory via
+        // app_process, so a stable internal-only id is sufficient here.
+        applicationId = "com.chiller3.bcr.headless"
         minSdk = 28
         targetSdk = 36
         versionCode = gitVersionCode
@@ -130,20 +115,35 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        // Keep the source link, but do not embed a copy of the repository in the
+        // release APK. Shipping the full tree as an asset makes static scanning
+        // much easier for apps looking for root/module-specific strings.
         buildConfigField("String", "PROJECT_URL_AT_COMMIT",
             "\"${projectUrl}/tree/${gitVersionTriple.third.name}\"")
 
         buildConfigField("String", "PROVIDER_AUTHORITY",
             "APPLICATION_ID + \".provider\"")
         resValue("string", "provider_authority", "$applicationId.provider")
+
+        // Keep capability flags in one place so the legacy app code continues
+        // to compile even though the release artifact now only ships the
+        // headless helper.
+        buildConfigField("boolean", "HAS_PRIVILEGED_CALL_CAPTURE", "false")
+        buildConfigField("boolean", "REQUIRES_PHONE_STATE", "false")
+        buildConfigField("boolean", "SUPPORTS_RECORD_RULES", "false")
+        buildConfigField("boolean", "SUPPORTS_TELECOM_APPS", "false")
+        buildConfigField("boolean", "SUPPORTS_RECORD_DIALING_STATE", "false")
     }
     androidResources {
         generateLocaleConfig = true
     }
     signingConfigs {
         create("release") {
-            val keystore = System.getenv("RELEASE_KEYSTORE")
-            storeFile = if (keystore != null) { File(keystore) } else { null }
+            // Fall back to the debug signing key when no dedicated release key is
+            // configured. This keeps local "release-mode" validation possible so
+            // we can test a non-debuggable, minified APK inside the Magisk module
+            // without requiring the maintainer's private signing material.
+            storeFile = if (hasCustomReleaseSigning) { File(releaseKeystore!!) } else { null }
             storePassword = System.getenv("RELEASE_KEYSTORE_PASSPHRASE")
             keyAlias = System.getenv("RELEASE_KEY_ALIAS")
             keyPassword = System.getenv("RELEASE_KEY_PASSPHRASE")
@@ -155,7 +155,11 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasCustomReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
@@ -184,14 +188,6 @@ kotlin {
     }
 }
 
-androidComponents.onVariants { variant ->
-    variant.sources.assets!!.addGeneratedSourceDirectory(archive) {
-        project.objects.directoryProperty().apply {
-            set(archiveDir)
-        }
-    }
-}
-
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_21
@@ -214,31 +210,11 @@ dependencies {
     testImplementation(libs.junit)
 }
 
-val archive = tasks.register("archive") {
-    inputs.property("gitVersionTriple.third", gitVersionTriple.third)
-
-    val outputFile = archiveDir.map { it.file("archive.tar") }
-    outputs.file(outputFile)
-
-    doLast {
-        val format = "tar_for_task_$name"
-
-        ArchiveCommand.registerFormat(format, TarFormat())
-        try {
-            outputFile.get().asFile.outputStream().use {
-                git.archive()
-                    .setTree(git.repository.resolve(gitVersionTriple.third.name))
-                    .setFormat(format)
-                    .setOutputStream(it)
-                    .call()
-            }
-        } finally {
-            ArchiveCommand.unregisterFormat(format)
-        }
-    }
-}
-
 androidComponents.onVariants { variant ->
+    if (variant.buildType != "release") {
+        return@onVariants
+    }
+
     val capitalized = variant.name.uppercaseFirstChar()
     val variantDir = extraDir.map { it.dir(variant.name) }
     val variantOutput = variant.outputs.first {
@@ -252,13 +228,12 @@ androidComponents.onVariants { variant ->
         }
     }
 
-    variant.lifecycleTasks.registerPreBuild(archive)
-
     val moduleProp = tasks.register("moduleProp${capitalized}") {
         inputs.property("projectUrl", projectUrl)
         inputs.property("releaseMetadataBranch", releaseMetadataBranch)
+        inputs.property("moduleId", moduleId)
+        inputs.property("moduleName", moduleName)
         inputs.property("rootProject.name", rootProject.name)
-        inputs.property("variant.applicationId", variant.applicationId)
         inputs.property("variant.name", variant.name)
         inputs.property("variantVersionCode", variantVersionCode)
         inputs.property("variantVersionName", variantVersionName)
@@ -267,84 +242,31 @@ androidComponents.onVariants { variant ->
         outputs.file(outputFile)
 
         doLast {
+            // Keep the Magisk module metadata intentionally minimal. Some apps perform
+            // broad scans of installed packages/modules, so avoid shipping
+            // package-install details or legacy system-app identifiers here.
             val props = LinkedHashMap<String, String>()
-            props["id"] = variant.applicationId.get()
-            props["name"] = rootProject.name
+            props["id"] = moduleId
+            props["name"] = moduleName
             props["version"] = "v${variantVersionName.get()}"
             props["versionCode"] = variantVersionCode.get().toString()
-            props["author"] = "chenxiaolong"
-            props["description"] = "Basic Call Recorder"
-
-            if (variant.name == "release") {
-                props["updateJson"] = "${projectUrl}/raw/${releaseMetadataBranch}/app/magisk/updates/${variant.name}/info.json"
-            }
+            props["author"] = "wjdob"
+            props["description"] = "Headless call recorder rebuild with module WebUI"
+            props["updateJson"] = "${projectUrl}/raw/${releaseMetadataBranch}/app/magisk/updates/${variant.name}/info.json"
 
             outputFile.get().asFile.writeText(
                 props.map { "${it.key}=${it.value}" }.joinToString("\n"))
         }
     }
 
-    val permissionsXml = tasks.register("permissionsXml${capitalized}") {
-        inputs.property("variant.applicationId", variant.applicationId)
-
-        val outputFile = variantDir.map { it.file("privapp-permissions-${variant.applicationId.get()}.xml") }
-        outputs.file(outputFile)
-
-        doLast {
-            outputFile.get().asFile.writeText("""
-                <?xml version="1.0" encoding="utf-8"?>
-                <permissions>
-                    <privapp-permissions package="${variant.applicationId.get()}">
-                        <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
-                        <permission name="android.permission.CONTROL_INCALL_EXPERIENCE" />
-                    </privapp-permissions>
-                </permissions>
-            """.trimIndent())
-        }
-    }
-
-    val addonD = tasks.register("addonD${capitalized}") {
-        inputs.property("variant.applicationId", variant.applicationId)
-        inputs.files(variantApkFiles)
-
-        val outputFile = variantDir.map { it.file("51-${variant.applicationId.get()}.sh") }
-        outputs.file(outputFile)
-
-        doLast {
-            val backupFiles = variantApkFiles.get().map {
-                "priv-app/${variant.applicationId.get()}/${File(it).name}"
-            } + listOf(
-                "etc/permissions/privapp-permissions-${variant.applicationId.get()}.xml",
-            )
-
-            outputFile.get().asFile.writeText(
-                $$"""
-                #!/sbin/sh
-                # ADDOND_VERSION=2
-
-                . /tmp/backuptool.functions
-
-                files="$${backupFiles.joinToString(" ")}"
-
-                case "${1}" in
-                backup|restore)
-                    for f in ${files}; do
-                        "${1}_file" "${S}/${f}"
-                    done
-                    ;;
-                esac
-            """.trimIndent())
-        }
-    }
-
     tasks.register<Zip>("zip${capitalized}") {
         inputs.property("rootProject.name", rootProject.name)
-        inputs.property("variant.applicationId", variant.applicationId)
+        inputs.property("moduleId", moduleId)
         inputs.property("variant.name", variant.name)
         inputs.property("variantVersionName", variantVersionName)
         inputs.files(variantApkFiles)
 
-        archiveFileName.set("${rootProject.name}-${variantVersionName.get()}-${variant.name}.zip")
+        archiveFileName.set("${rootProject.name}-${variantVersionName.get()}-headless.zip")
         // Force instantiation of old value or else this will cause infinite recursion
         destinationDirectory.set(destinationDirectory.dir(variant.name).get())
 
@@ -353,17 +275,12 @@ androidComponents.onVariants { variant ->
         isReproducibleFileOrder = true
 
         from(moduleProp.map { it.outputs })
-        from(addonD.map { it.outputs }) {
-            filePermissions {
-                unix("755")
-            }
-            into("system/addon.d")
-        }
-        from(permissionsXml.map { it.outputs }) {
-            into("system/etc/permissions")
-        }
         from(variantApkFiles) {
-            into("system/priv-app/${variant.applicationId.get()}")
+            // Keep the helper APK inside the module directory. The headless
+            // daemon loads it with app_process, but nothing is installed into
+            // PackageManager or mounted into /system anymore.
+            rename { "bcr-headless.apk" }
+            into("tools")
         }
 
         val magiskDir = File(projectDir, "magisk")
@@ -374,10 +291,23 @@ androidComponents.onVariants { variant ->
             }
         }
 
-        from(File(magiskDir, "boot_common.sh"))
-        from(File(magiskDir, "post-fs-data.sh"))
-        from(File(magiskDir, "service.sh"))
-        from(File(magiskDir, "customize.sh"))
+        for (script in arrayOf(
+            "post-fs-data.sh",
+            "service.sh",
+            "action.sh",
+            "module_common.sh",
+            "customize.sh",
+        )) {
+            from(File(magiskDir, script)) {
+                filePermissions {
+                    unix("755")
+                }
+            }
+        }
+        from(File(magiskDir, "skip_mount"))
+        from(File(magiskDir, "webroot")) {
+            into("webroot")
+        }
 
         from(File(rootDir, "LICENSE"))
         from(File(rootDir, "README.md"))
@@ -406,7 +336,7 @@ androidComponents.onVariants { variant ->
             val root = JSONObject()
             root.put("version", variantVersionName.get())
             root.put("versionCode", variantVersionCode.get())
-            root.put("zipUrl", "${projectUrl}/releases/download/${gitVersionTriple.first}/${rootProject.name}-${variantVersionName.get()}-release.zip")
+            root.put("zipUrl", "${projectUrl}/releases/download/${gitVersionTriple.first}/${rootProject.name}-${variantVersionName.get()}-headless.zip")
             root.put("changelog", "${projectUrl}/raw/${gitVersionTriple.first}/app/magisk/updates/${variant.name}/changelog.txt")
 
             jsonFile.writer().use {

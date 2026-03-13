@@ -1,7 +1,7 @@
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 jobs:
   build:
@@ -24,5 +24,7 @@ jobs:
           cache: gradle
 
       - name: Build and test
-        # Debug build only since release builds require a signing key
-        run: ./gradlew --no-daemon build zipDebug -x assembleRelease
+        # The headless rebuild can validate its release zip in CI because the
+        # Gradle config falls back to the debug signing key when no private
+        # release key is provided.
+        run: ./gradlew --no-daemon build zipRelease

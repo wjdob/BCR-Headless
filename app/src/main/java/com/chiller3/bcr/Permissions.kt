@@ -22,12 +22,23 @@ object Permissions {
             arrayOf()
         }
 
-    val REQUIRED: Array<String> = arrayOf(Manifest.permission.RECORD_AUDIO) + NOTIFICATION
-    val OPTIONAL: Array<String> = arrayOf(
-        Manifest.permission.READ_CALL_LOG,
-        Manifest.permission.READ_CONTACTS,
-        Manifest.permission.READ_PHONE_STATE,
-    )
+    val REQUIRED: Array<String> = buildList {
+        add(Manifest.permission.RECORD_AUDIO)
+        addAll(NOTIFICATION)
+        if (BuildConfig.REQUIRES_PHONE_STATE) {
+            // Some builds may rely on regular phone-state signals instead of
+            // privileged telephony integration, so READ_PHONE_STATE becomes
+            // required when that capability flag is enabled.
+            add(Manifest.permission.READ_PHONE_STATE)
+        }
+    }.toTypedArray()
+    val OPTIONAL: Array<String> = buildList {
+        add(Manifest.permission.READ_CALL_LOG)
+        add(Manifest.permission.READ_CONTACTS)
+        if (!BuildConfig.REQUIRES_PHONE_STATE) {
+            add(Manifest.permission.READ_PHONE_STATE)
+        }
+    }.toTypedArray()
 
     /**
      * Check if all permissions required for call recording have been granted.

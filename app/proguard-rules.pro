@@ -1,16 +1,5 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.kts.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
-
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Keep only the pieces that are loaded reflectively or invoked from the
+# module shell scripts. Everything else can still be optimized normally.
 
 # Keep log tags.
 -keepclasseswithmembers,allowoptimization,allowshrinking class com.chiller3.bcr.** {
@@ -35,7 +24,9 @@
     private int rowCount;
 }
 
-# Keep standalone CLI utilities
--keep class com.chiller3.bcr.standalone.* {
+# Keep the headless daemon entrypoint. It is launched directly from the module
+# scripts with app_process, so the fully qualified main() name must remain
+# stable even though the helper APK is otherwise aggressively stripped.
+-keep class com.chiller3.bcr.headless.HeadlessMain {
     void main(java.lang.String[]);
 }

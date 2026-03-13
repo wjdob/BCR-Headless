@@ -1,6 +1,7 @@
 #!/sbin/sh
 
 # SPDX-FileCopyrightText: 2022-2024 Andrew Gunnerson
+# SPDX-FileCopyrightText: 2026 wjdob
 # SPDX-License-Identifier: GPL-3.0-only
 
 OUTFD=${2}
@@ -13,63 +14,11 @@ ui_print() {
 }
 
 if [ -f /sbin/recovery ] || [ -f /system/bin/recovery ]; then
-    # Installing via recovery. Always do a direct install.
-    set -exu
-
-    ui_print 'Mounting system'
-
-    slot=$(getprop ro.boot.slot_suffix)
-
-    if [[ -e /dev/block/mapper/system"${slot}" ]]; then
-        ui_print "- Device uses dynamic partitions"
-        block_dev=/dev/block/mapper/system"${slot}"
-        blockdev --setrw "${block_dev}"
-    elif [[ -e /dev/block/bootdevice/by-name/system"${slot}" ]]; then
-        ui_print "- Device uses static partitions"
-        block_dev=/dev/block/bootdevice/by-name/system"${slot}"
-    else
-        ui_print "- System block device not found"
-        exit 1
-    fi
-
-    ui_print "- System block device: ${block_dev}"
-
-    if [[ -d /mnt/system ]]; then
-        mount_point=/mnt/system
-        root_dir=${mount_point}
-    elif [[ -d /system_root ]]; then
-        mount_point=/system_root
-        root_dir=${mount_point}
-    else
-        mount_point=/system
-        if [[ "$(getprop ro.build.system_root_image)" == true ]]; then
-            root_dir=${mount_point}
-        else
-            root_dir=/
-        fi
-    fi
-
-    ui_print "- System mount point: ${mount_point}"
-    ui_print "- Root directory: ${root_dir}"
-
-    if mountpoint -q "${mount_point}"; then
-        mount -o remount,rw "${mount_point}"
-    else
-        mount "${block_dev}" "${mount_point}"
-    fi
-
-    ui_print 'Extracting files'
-
-    # Just overwriting isn't sufficient because the apk filenames are different
-    # between debug and release builds
-    app_id=$(unzip -p "${ZIPFILE}" module.prop | grep '^id=' | cut -d= -f2)
-
-    # rm on some custom recoveries doesn't exit with 0 on ENOENT, even with -f
-    rm -rf "${root_dir}/system/priv-app/${app_id}" || :
-
-    unzip -o "${ZIPFILE}" 'system/*' -d "${root_dir}"
-
-    ui_print 'Done!'
+    # The current artifact is a headless module-manager package, not a direct
+    # system-partition installer. Failing fast here avoids pretending that the
+    # old recovery/system-app path still exists.
+    ui_print 'This build must be installed as a Magisk or KernelSU module.'
+    exit 1
 else
     # Installing via Magisk Manager.
 

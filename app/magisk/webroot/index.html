@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BCR Headless</title>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <main class="shell">
+        <section class="hero">
+            <p class="eyebrow">Headless Call Recorder</p>
+            <h1>BCR Headless</h1>
+            <p class="lede">
+                Quiet call recording for rooted devices with a lightweight
+                module UI for capture settings, output storage, and recording
+                history.
+            </p>
+            <div class="tabs" role="tablist" aria-label="Views">
+                <button id="recorder-tab" class="tab active" type="button">Recorder</button>
+                <button id="recordings-tab" class="tab ghost" type="button">Recordings</button>
+                <button id="debug-tab" class="tab ghost" type="button">Debug</button>
+            </div>
+        </section>
+
+        <section id="recorder-view" class="view stack">
+            <article class="card summary-card">
+                <div class="card-head compact">
+                    <h2>Status</h2>
+                    <div class="toolbar compact-toolbar">
+                        <button id="refresh-status-button" class="ghost" type="button">Refresh</button>
+                    </div>
+                </div>
+                <div class="summary-grid">
+                    <div class="summary-tile">
+                        <span class="label">Last Result</span>
+                        <strong id="last-result">No recordings yet</strong>
+                    </div>
+                    <div id="last-output-tile" class="summary-tile clickable" role="button" tabindex="0">
+                        <span class="label">Last Output</span>
+                        <strong id="last-output">/sdcard/Recordings/BCR</strong>
+                    </div>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="card-head compact">
+                    <h2>Recorder</h2>
+                </div>
+
+                <label class="field toggle-row">
+                    <span>Recording enabled</span>
+                    <input id="recording-enabled" type="checkbox">
+                </label>
+                <small class="field-help">
+                    Disabled by default after install. Turn this on and save
+                    changes to arm call recording on this device.
+                </small>
+
+                <label class="field toggle-row">
+                    <span>Recording log</span>
+                    <input id="recording-log-enabled" type="checkbox">
+                </label>
+                <small class="field-help">
+                    Stores a running in-module history of captured calls and
+                    their status. When disabled, Last Output in Status still
+                    tracks the most recent saved recording.
+                </small>
+
+                <label class="field">
+                    <span>Output directory</span>
+                    <input id="output-dir" type="text" spellcheck="false">
+                    <small>Plain filesystem path used by the headless recorder.</small>
+                </label>
+
+                <label class="field">
+                    <span>Minimum duration</span>
+                    <div class="inline-input">
+                        <input id="min-duration" type="number" min="0" step="1">
+                        <span>seconds</span>
+                    </div>
+                    <small>Shorter recordings are discarded after the call ends.</small>
+                </label>
+
+                <div class="actions">
+                    <button id="save-button" type="button">Save Changes</button>
+                    <button id="reset-button" class="ghost" type="button">Reset Defaults</button>
+                    <button id="open-output-button" class="ghost" type="button">Open Output Folder</button>
+                </div>
+            </article>
+        </section>
+
+        <section id="recordings-view" class="view stack" hidden>
+            <article class="card">
+                <div class="card-head">
+                    <h2>Recorded Calls</h2>
+                    <div class="toolbar">
+                        <button id="refresh-log-button" class="ghost" type="button">Refresh</button>
+                        <button id="clear-log-button" class="ghost danger" type="button">Clear Log</button>
+                    </div>
+                </div>
+                <div id="recording-log-list" class="entry-list">
+                    <p class="entry-empty">Loading recorded calls...</p>
+                </div>
+            </article>
+        </section>
+
+        <section id="debug-view" class="view stack" hidden>
+            <article class="card">
+                <div class="card-head">
+                    <h2>Runtime</h2>
+                    <div class="toolbar">
+                        <span id="runtime-badge" class="badge">Loading</span>
+                        <button id="refresh-button" class="ghost" type="button">Refresh</button>
+                        <button id="restart-button" class="ghost" type="button">Restart Daemon</button>
+                    </div>
+                </div>
+                <pre id="status-output" class="console">Loading module state...</pre>
+            </article>
+
+            <article class="card">
+                <div class="card-head">
+                    <h2>Diagnostics</h2>
+                    <div class="toolbar">
+                        <button id="probe-button" class="ghost" type="button">Run Probe</button>
+                        <button id="logs-button" class="ghost" type="button">Show Logs</button>
+                    </div>
+                </div>
+                <pre id="diagnostic-output" class="console muted">No diagnostics yet.</pre>
+            </article>
+        </section>
+    </main>
+
+    <div id="confirm-overlay" class="confirm-overlay" hidden>
+        <div class="confirm-card">
+            <h2>Clear Recording Log</h2>
+            <p>Remove all recorded call history entries from this module?</p>
+            <div class="actions compact-actions">
+                <button id="confirm-clear-button" class="danger" type="button">Clear</button>
+                <button id="cancel-clear-button" class="ghost" type="button">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

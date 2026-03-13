@@ -1,0 +1,474 @@
+:root {
+    --bg: #f5efe1;
+    --bg-strong: #e8dcc4;
+    --card: rgba(255, 251, 242, 0.92);
+    --ink: #1c1a18;
+    --muted: #645d53;
+    --accent: #0b6e4f;
+    --accent-strong: #084f39;
+    --danger: #8f2d1f;
+    --line: rgba(28, 26, 24, 0.12);
+    --shadow: 0 18px 44px rgba(65, 45, 12, 0.16);
+}
+
+* {
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+html,
+body {
+    width: 100%;
+    overflow-x: hidden;
+}
+
+body {
+    margin: 0;
+    color: var(--ink);
+    font-family: "Segoe UI", "Noto Sans", sans-serif;
+    background:
+        radial-gradient(circle at top left, rgba(11, 110, 79, 0.14), transparent 20rem),
+        radial-gradient(circle at bottom right, rgba(184, 88, 17, 0.16), transparent 18rem),
+        linear-gradient(180deg, #faf5ea 0%, var(--bg) 100%);
+}
+
+code {
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+.shell {
+    width: min(100%, 46rem);
+    margin: 0 auto;
+    padding: 1rem;
+}
+
+.stack {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.view[hidden] {
+    display: none;
+}
+
+.hero,
+.card {
+    border: 1px solid var(--line);
+    border-radius: 1.25rem;
+    background: var(--card);
+    box-shadow: var(--shadow);
+}
+
+.hero {
+    padding: 1.3rem;
+    background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(255, 247, 232, 0.94)),
+        var(--card);
+}
+
+.eyebrow {
+    margin: 0 0 0.3rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    color: var(--accent);
+}
+
+.hero h1 {
+    margin: 0;
+    font-size: clamp(2rem, 8vw, 2.8rem);
+    line-height: 0.98;
+}
+
+.lede {
+    margin: 0.85rem 0 0;
+    color: var(--muted);
+    line-height: 1.5;
+}
+
+/* Keep the top-level navigation evenly balanced across phone widths. */
+.tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-top: 1rem;
+    width: 100%;
+}
+
+.card {
+    padding: 1rem;
+    backdrop-filter: blur(12px);
+}
+
+.card-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.card-head.compact {
+    margin-bottom: 0.75rem;
+}
+
+.card-head h2 {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.summary-tile {
+    padding: 0.9rem;
+    border-radius: 1rem;
+    background: rgba(11, 110, 79, 0.08);
+    border: 1px solid rgba(11, 110, 79, 0.12);
+}
+
+.summary-tile strong,
+.summary-tile .label {
+    display: block;
+}
+
+.summary-tile strong {
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.summary-tile.clickable {
+    cursor: pointer;
+}
+
+.summary-tile.clickable:focus-visible,
+.summary-tile.clickable:hover {
+    border-color: rgba(11, 110, 79, 0.28);
+    background: rgba(11, 110, 79, 0.12);
+    outline: none;
+}
+
+.label {
+    margin-bottom: 0.35rem;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin-top: 0.95rem;
+}
+
+.field span {
+    font-weight: 600;
+}
+
+.field small {
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.field-help {
+    display: block;
+    margin: -0.3rem 0 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.toggle-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+input[type="text"],
+input[type="number"] {
+    width: 100%;
+    border: 1px solid rgba(28, 26, 24, 0.18);
+    border-radius: 0.95rem;
+    padding: 0.9rem 1rem;
+    background: rgba(255, 255, 255, 0.78);
+    color: var(--ink);
+    font: inherit;
+}
+
+input[type="checkbox"] {
+    width: 1.25rem;
+    height: 1.25rem;
+    accent-color: var(--accent);
+    flex: 0 0 auto;
+}
+
+.inline-input {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.inline-input span {
+    font-size: 0.95rem;
+    color: var(--muted);
+}
+
+.actions,
+.toolbar {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.actions {
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    margin-top: 1.2rem;
+}
+
+.toolbar {
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    width: min(100%, 20rem);
+}
+
+.compact-toolbar {
+    width: min(100%, 8rem);
+}
+
+button {
+    width: 100%;
+    border: 0;
+    border-radius: 999px;
+    padding: 0.85rem 1.1rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+    color: white;
+    font: inherit;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+button.ghost {
+    background: rgba(11, 110, 79, 0.08);
+    color: var(--accent-strong);
+}
+
+button.danger {
+    background: rgba(143, 45, 31, 0.08);
+    color: var(--danger);
+}
+
+button.tab {
+    width: 100%;
+    min-width: 0;
+    min-height: 3rem;
+}
+
+button.active {
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+
+button:disabled {
+    opacity: 0.55;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.42rem 0.78rem;
+    border-radius: 999px;
+    border: 1px solid rgba(11, 110, 79, 0.2);
+    background: rgba(11, 110, 79, 0.08);
+    color: var(--accent-strong);
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-align: center;
+    min-height: 2.9rem;
+}
+
+.badge.recording {
+    border-color: rgba(143, 45, 31, 0.24);
+    background: rgba(143, 45, 31, 0.1);
+    color: var(--danger);
+}
+
+.console {
+    max-width: 100%;
+    min-height: 14rem;
+    margin: 0;
+    padding: 1rem;
+    border-radius: 1rem;
+    background: #171411;
+    color: #f3ebdd;
+    overflow: auto;
+    font: 0.86rem/1.5 "Cascadia Code", "Consolas", monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.console.muted {
+    min-height: 11rem;
+}
+
+.entry-list {
+    display: grid;
+    gap: 0.85rem;
+}
+
+.entry-empty {
+    margin: 0;
+    color: var(--muted);
+}
+
+.entry-card {
+    display: grid;
+    gap: 0.8rem;
+    padding: 0.95rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(28, 26, 24, 0.1);
+    background: rgba(255, 255, 255, 0.66);
+}
+
+.entry-card.clickable {
+    cursor: pointer;
+}
+
+.entry-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.entry-head strong {
+    display: block;
+    font-size: 1rem;
+}
+
+.entry-meta {
+    margin-top: 0.25rem;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.entry-meta.secondary {
+    margin-top: 0.1rem;
+    font-size: 0.94rem;
+}
+
+.entry-details {
+    display: grid;
+    gap: 0.65rem;
+}
+
+.entry-details strong {
+    display: block;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.entry-status {
+    align-self: start;
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.entry-status.succeeded {
+    background: rgba(11, 110, 79, 0.12);
+    color: var(--accent-strong);
+}
+
+.entry-status.failed,
+.entry-status.discarded_too_short {
+    background: rgba(143, 45, 31, 0.12);
+    color: var(--danger);
+}
+
+/* Use an in-page confirmation dialog because some WebUI hosts do not surface
+ * native window.confirm() prompts reliably. */
+.confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: none;
+    place-items: center;
+    padding: 1rem;
+    background: rgba(28, 26, 24, 0.35);
+    backdrop-filter: blur(8px);
+}
+
+.confirm-overlay.open {
+    display: grid;
+}
+
+.confirm-overlay[hidden] {
+    display: none !important;
+}
+
+.confirm-card {
+    width: min(100%, 24rem);
+    padding: 1.2rem;
+    border: 1px solid var(--line);
+    border-radius: 1.2rem;
+    background: rgba(255, 251, 242, 0.98);
+    box-shadow: var(--shadow);
+}
+
+.confirm-card h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.15rem;
+}
+
+.confirm-card p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.5;
+}
+
+.compact-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 1rem;
+}
+
+@media (max-width: 640px) {
+    .shell {
+        padding: 0.8rem;
+    }
+
+    .summary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .card-head,
+    .toggle-row,
+    .entry-head {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .toolbar {
+        width: 100%;
+    }
+
+    .compact-toolbar {
+        width: 100%;
+    }
+
+    button.tab {
+        min-height: 2.85rem;
+    }
+}

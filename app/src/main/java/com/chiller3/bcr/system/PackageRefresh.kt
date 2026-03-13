@@ -5,7 +5,7 @@
 
 @file:Suppress("SameParameterValue")
 
-package com.chiller3.bcr.standalone
+package com.chiller3.bcr.system
 
 import android.util.Log
 import com.chiller3.bcr.BuildConfig

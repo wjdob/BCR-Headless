@@ -17,5 +17,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "BCR"
+rootProject.name = "BCR-Headless"
 include(":app")

@@ -1,20 +1,15 @@
-# SPDX-FileCopyrightText: 2023-2024 Andrew Gunnerson
+#!/system/bin/sh
+
+# SPDX-FileCopyrightText: 2023 Andrew Gunnerson
+# SPDX-FileCopyrightText: 2026 wjdob
 # SPDX-License-Identifier: GPL-3.0-only
 
-# On some devices, the system time is set too late in the boot process. This,
-# for some reason, causes the package manager service to not update the cache
-# entry for BCR despite the mtime of the apk being newer than the mtime of the
-# cache entry [1]. This causes BCR to crash with an obscure error about the app
-# theme not being derived from Theme.AppCompat. This script works around the
-# issue by forcibly deleting BCR's package manager cache entry on every boot.
-#
-# [1] https://cs.android.com/android/platform/superproject/+/android-13.0.0_r42:frameworks/base/services/core/java/com/android/server/pm/parsing/PackageCacher.java;l=139
+source "${0%/*}/module_common.sh"
 
-source "${0%/*}/boot_common.sh" /data/local/tmp/bcr_post-fs-data.log
-
-header Timestamps
-ls -ldZ "${cli_apk%/*}"
-find /data/system/package_cache -name "${app_id}-*" -exec ls -ldZ {} \+
-
-header Clear package manager caches
-run_cli_apk com.chiller3.bcr.standalone.ClearPackageManagerCachesKt
+# The headless pivot avoids package-manager and /system mutations entirely.
+# post-fs-data now only prepares module-local state and refreshes the manager
+# description once KernelSU's temporary config store has been cleared.
+ensure_dirs
+ensure_defaults
+clear_stale_pid
+refresh_description

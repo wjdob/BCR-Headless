@@ -11,7 +11,7 @@
 )
 @file:Suppress("SameParameterValue")
 
-package com.chiller3.bcr.standalone
+package com.chiller3.bcr.system
 
 import android.Manifest
 import android.annotation.SuppressLint

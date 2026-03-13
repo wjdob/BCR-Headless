@@ -49,6 +49,8 @@ class SettingsFragment : PreferenceBaseFragment(), Preference.OnPreferenceChange
     private lateinit var prefOutputDir: LongClickablePreference
     private lateinit var prefOutputFormat: Preference
     private lateinit var prefMinDuration: Preference
+    private lateinit var prefRecordTelecomApps: SwitchPreferenceCompat
+    private lateinit var prefRecordDialingState: SwitchPreferenceCompat
     private lateinit var prefShowLauncherIcon: SwitchPreferenceCompat
     private lateinit var prefVersion: LongClickablePreference
     private lateinit var prefMigrateDirectBoot: Preference
@@ -105,6 +107,9 @@ class SettingsFragment : PreferenceBaseFragment(), Preference.OnPreferenceChange
         prefMinDuration.onPreferenceClickListener = this
         refreshMinDuration()
 
+        prefRecordTelecomApps = findPreference("record_telecom_apps")!!
+        prefRecordDialingState = findPreference("record_dialing_state")!!
+
         prefShowLauncherIcon = findPreference(Preferences.PREF_SHOW_LAUNCHER_ICON)!!
         prefShowLauncherIcon.onPreferenceChangeListener = this
         refreshLauncherIcon()
@@ -120,6 +125,7 @@ class SettingsFragment : PreferenceBaseFragment(), Preference.OnPreferenceChange
         prefSaveLogs = findPreference(Preferences.PREF_SAVE_LOGS)!!
         prefSaveLogs.onPreferenceClickListener = this
 
+        applyCapabilityVisibility()
         refreshDebugPrefs()
 
         lifecycleScope.launch {
@@ -213,6 +219,14 @@ class SettingsFragment : PreferenceBaseFragment(), Preference.OnPreferenceChange
         categoryDebug.isVisible = prefs.isDebugMode
     }
 
+    private fun applyCapabilityVisibility() {
+        // Capability flags let slimmer builds hide controls for features that
+        // are not actually wired into the packaged runtime.
+        prefRecordRules.isVisible = BuildConfig.SUPPORTS_RECORD_RULES
+        prefRecordTelecomApps.isVisible = BuildConfig.SUPPORTS_TELECOM_APPS
+        prefRecordDialingState.isVisible = BuildConfig.SUPPORTS_RECORD_DIALING_STATE
+    }
+
     override fun onPreferenceChange(preference: Preference, newValue: Any?): Boolean {
         val context = requireContext()
 
@@ -221,7 +235,8 @@ class SettingsFragment : PreferenceBaseFragment(), Preference.OnPreferenceChange
                 return true
             } else {
                 // Ask for optional permissions the first time only
-                requestPermissionRequired.launch(Permissions.REQUIRED + Permissions.OPTIONAL)
+                requestPermissionRequired.launch(
+                    (Permissions.REQUIRED + Permissions.OPTIONAL).distinct().toTypedArray())
             }
             prefShowLauncherIcon -> {
                 prefs.showLauncherIcon = newValue == true
