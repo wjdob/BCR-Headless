@@ -7,8 +7,10 @@
 
 package com.chiller3.bcr.headless
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.os.Build
@@ -87,7 +89,26 @@ object HeadlessMain {
         println("telephony.present=${telephonyManager != null}")
         println("call.state=${telephonyManager?.callState ?: -1}")
         println("telecom.present=${telecomManager != null}")
-        println("telecom.in_call=${try { telecomManager?.isInCall == true } catch (_: Exception) { false }}")
+        // Probe output should follow the same runtime permission contract as the
+        // daemon itself so local debugging and CI lint agree on the access pattern.
+        val canReadPhoneState =
+            context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) ==
+                PackageManager.PERMISSION_GRANTED ||
+                (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        context.checkSelfPermission(Manifest.permission.READ_BASIC_PHONE_STATE) ==
+                        PackageManager.PERMISSION_GRANTED
+                    )
+        val telecomInCall = if (canReadPhoneState) {
+            try {
+                telecomManager?.isInCall == true
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+        println("telecom.in_call=$telecomInCall")
         println("voice_call.min_buffer=${minBuffer}")
     }
 

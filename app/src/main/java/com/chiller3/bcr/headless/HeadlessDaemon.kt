@@ -7,15 +7,18 @@
 
 package com.chiller3.bcr.headless
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import android.telecom.TelecomManager
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
+import androidx.annotation.RequiresApi
 import com.chiller3.bcr.output.CallDirection
 import java.io.File
 
@@ -223,14 +226,30 @@ class HeadlessDaemon(
             return PolledState(telephonyState, "telephony_manager_poll")
         }
 
-        val telecomInCall = try {
-            telecomManager?.isInCall == true || telecomManager?.isInManagedCall == true
-        } catch (e: Exception) {
-            statusWriter.update(
-                mapOf(
-                    "telephony.telecom_poll_error" to (e.localizedMessage ?: e.javaClass.simpleName),
-                ),
-            )
+        // TelecomManager state is only a fallback for ROMs where direct call-state
+        // callbacks fail. Guard it behind the same runtime permission check that
+        // lint expects, and keep the fallback limited to normal in-call state.
+        val telecomInCall = if (
+            context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) ==
+                PackageManager.PERMISSION_GRANTED ||
+                (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        context.checkSelfPermission(Manifest.permission.READ_BASIC_PHONE_STATE) ==
+                        PackageManager.PERMISSION_GRANTED
+                    )
+        ) {
+            try {
+                telecomManager?.isInCall == true
+            } catch (e: Exception) {
+                statusWriter.update(
+                    mapOf(
+                        "telephony.telecom_poll_error" to
+                            (e.localizedMessage ?: e.javaClass.simpleName),
+                    ),
+                )
+                false
+            }
+        } else {
             false
         }
 
@@ -383,6 +402,7 @@ class HeadlessDaemon(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
     private class HeadlessCallStateCallback(
         private val handler: (Int) -> Unit,
     ) : TelephonyCallback(), TelephonyCallback.CallStateListener {

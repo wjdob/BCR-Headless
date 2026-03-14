@@ -43,7 +43,7 @@ class RecordingLogStore(
         // Keep the on-device history bounded so the module does not grow
         // without limit on long-running installs.
         while (entries.size > MAX_ENTRIES) {
-            entries.removeLast()
+            entries.removeAt(entries.lastIndex)
         }
 
         save(entries)
