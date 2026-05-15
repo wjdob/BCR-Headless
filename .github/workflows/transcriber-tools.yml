@@ -66,12 +66,24 @@ jobs:
       - name: Build packages
         shell: bash
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ steps.config.outputs.ndk }}
-          CMAKE_BIN: ${{ env.ANDROID_HOME }}/cmake/${{ steps.config.outputs.cmake }}/bin/cmake
-          NINJA_BIN: ${{ env.ANDROID_HOME }}/cmake/${{ steps.config.outputs.cmake }}/bin/ninja
           ASSET_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.config.outputs.release_tag }}
           WHISPER_CPP_REF_OVERRIDE: ${{ steps.config.outputs.whisper_ref }}
-        run: bash scripts/build-whisper-android.sh
+        run: |
+          set -euo pipefail
+
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${{ steps.config.outputs.ndk }}"
+          export CMAKE_BIN="${ANDROID_HOME}/cmake/${{ steps.config.outputs.cmake }}/bin/cmake"
+          export NINJA_BIN="${ANDROID_HOME}/cmake/${{ steps.config.outputs.cmake }}/bin/ninja"
+
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+          echo "CMAKE_BIN=${CMAKE_BIN}"
+          echo "NINJA_BIN=${NINJA_BIN}"
+
+          test -x "${CMAKE_BIN}"
+          test -x "${NINJA_BIN}"
+
+          bash scripts/build-whisper-android.sh
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
