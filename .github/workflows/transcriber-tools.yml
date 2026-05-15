@@ -50,9 +50,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          set +e
           yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
               "ndk;${{ steps.config.outputs.ndk }}" \
               "cmake;${{ steps.config.outputs.cmake }}"
+          sdkmanager_status=${PIPESTATUS[1]}
+          set -e
+
+          if [[ "${sdkmanager_status}" -ne 0 ]]; then
+              echo "sdkmanager failed with exit code ${sdkmanager_status}"
+              exit "${sdkmanager_status}"
+          fi
 
       - name: Build packages
         shell: bash
