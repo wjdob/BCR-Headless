@@ -4,7 +4,7 @@
 # SPDX-FileCopyrightText: 2026 wjdob
 # SPDX-License-Identifier: GPL-3.0-only
 
-source "${0%/*}/module_common.sh"
+. "${0%/*}/module_common.sh"
 
 # The headless pivot avoids package-manager and /system mutations entirely.
 # post-fs-data now only prepares module-local state and refreshes the manager

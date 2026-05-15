@@ -28,6 +28,7 @@ data class HeadlessConfig(
     val minDurationSeconds: Int,
     val logEnabled: Boolean,
     val notificationsEnabled: Boolean,
+    val stereoEnabled: Boolean,
 )
 
 class HeadlessDaemon(
@@ -68,6 +69,7 @@ class HeadlessDaemon(
                 "config.min_duration" to config.minDurationSeconds.toString(),
                 "config.log_enabled" to config.logEnabled.toString(),
                 "config.notifications_enabled" to config.notificationsEnabled.toString(),
+                "config.stereo_enabled" to config.stereoEnabled.toString(),
                 "telephony.monitor_mode" to "callback+broadcast+poll",
                 "telephony.callback_registered" to "0",
                 "telephony.receiver_registered" to "0",
@@ -331,6 +333,7 @@ class HeadlessDaemon(
             outputDir = config.outputDir,
             minDurationSeconds = config.minDurationSeconds,
             direction = direction,
+            stereoEnabled = config.stereoEnabled,
             listener = this,
         )
         recorder = session
@@ -377,6 +380,7 @@ class HeadlessDaemon(
                 "last.result" to finalResult.status.serializedName,
                 "last.output" to finalResult.outputFile?.absolutePath,
                 "last.duration_secs" to finalResult.durationSeconds?.toString(),
+                "last.audio_channels" to finalResult.channelCount?.toString(),
                 "last.error" to finalResult.error,
                 "last.event" to "recording-finished",
                 "last.phone_number" to resolvedPhoneNumber?.display,
@@ -490,6 +494,7 @@ class HeadlessDaemon(
                 phoneNumber = resolvedPhoneNumber?.display,
                 status = result.status.serializedName,
                 durationSeconds = result.durationSeconds,
+                audioChannels = result.channelCount,
                 outputFile = result.outputFile?.absolutePath,
                 error = result.error,
             ),

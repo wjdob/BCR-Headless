@@ -23,7 +23,7 @@ object HeadlessMain {
     @JvmStatic
     fun main(args: Array<String>) {
         require(args.isNotEmpty()) {
-            "Expected subcommand: daemon <module_dir> <output_dir> <min_duration> <log_enabled> <notifications_enabled> | probe <module_dir> <output_dir> | open-output-dir <output_dir> | open-recording <path>"
+            "Expected subcommand: daemon <module_dir> <output_dir> <min_duration> <log_enabled> <notifications_enabled> <stereo_enabled> | probe <module_dir> <output_dir> | open-output-dir <output_dir> | open-recording <path> | transcriber ..."
         }
 
         when (args[0]) {
@@ -31,6 +31,7 @@ object HeadlessMain {
             "probe" -> runProbe(args)
             "open-output-dir" -> runOpenOutputDir(args)
             "open-recording" -> runOpenRecording(args)
+            "transcriber" -> HeadlessTranscriber.run(args.drop(1).toTypedArray())
             else -> throw IllegalArgumentException("Unknown subcommand: ${args[0]}")
         }
     }
@@ -48,6 +49,7 @@ object HeadlessMain {
         // sync.
         val logEnabled = parseBooleanArg(args.getOrNull(4), defaultValue = true)
         val notificationsEnabled = parseBooleanArg(args.getOrNull(5), defaultValue = true)
+        val stereoEnabled = parseBooleanArg(args.getOrNull(6), defaultValue = false)
         val context = getSystemContext()
 
         HeadlessDaemon(
@@ -58,6 +60,7 @@ object HeadlessMain {
                 minDurationSeconds = minDurationSeconds,
                 logEnabled = logEnabled,
                 notificationsEnabled = notificationsEnabled,
+                stereoEnabled = stereoEnabled,
             ),
         ).start()
 

@@ -3,22 +3,22 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>BCR Headless</title>
+    <title>BCR Headless Test</title>
     <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
     <main class="shell">
         <section class="hero">
-            <p class="eyebrow">Headless Call Recorder</p>
-            <h1>BCR Headless</h1>
+            <p class="eyebrow">Test Build • Headless Call Recorder</p>
+            <h1>BCR Headless Test</h1>
             <p class="lede">
-                Quiet call recording for rooted devices with a lightweight
-                module UI for capture settings, output storage, and recording
-                history.
+                Parallel-install test build for experimental stereo capture,
+                offline transcription, and speaker-labeled transcript queues.
             </p>
             <div class="tabs" role="tablist" aria-label="Views">
                 <button id="recorder-tab" class="tab active" type="button">Recorder</button>
                 <button id="recordings-tab" class="tab ghost" type="button">Recordings</button>
+                <button id="transcriber-tab" class="tab ghost" type="button">Transcriber</button>
                 <button id="debug-tab" class="tab ghost" type="button">Debug</button>
             </div>
         </section>
@@ -67,6 +67,16 @@
                     tracks the most recent saved recording.
                 </small>
 
+                <label class="field toggle-row">
+                    <span>Experimental stereo uplink/downlink</span>
+                    <input id="recording-stereo-enabled" type="checkbox">
+                </label>
+                <small class="field-help">
+                    Requests stereo call audio for future recordings. If the
+                    ROM rejects stereo VOICE_CALL capture, recording falls back
+                    to mono.
+                </small>
+
                 <label class="field">
                     <span>Output directory</span>
                     <input id="output-dir" type="text" spellcheck="false">
@@ -105,6 +115,158 @@
             </article>
         </section>
 
+        <section id="transcriber-view" class="view stack" hidden>
+            <article class="card summary-card">
+                <div class="card-head compact">
+                    <h2>Transcriber</h2>
+                    <div class="toolbar compact-toolbar">
+                        <button id="refresh-transcriber-button" class="ghost" type="button">Refresh</button>
+                    </div>
+                </div>
+                <div class="summary-grid">
+                    <div class="summary-tile">
+                        <span class="label">Engine</span>
+                        <strong id="transcriber-engine-state">Disabled</strong>
+                    </div>
+                    <div class="summary-tile">
+                        <span class="label">Queue</span>
+                        <strong id="transcriber-queue-state">No jobs</strong>
+                    </div>
+                </div>
+                <div class="progress-stack">
+                    <div>
+                        <div class="progress-head">
+                            <span>Current file</span>
+                            <strong id="transcriber-current-progress-label">0%</strong>
+                        </div>
+                        <div class="progress-bar"><span id="transcriber-current-progress"></span></div>
+                    </div>
+                    <div>
+                        <div class="progress-head">
+                            <span>All jobs</span>
+                            <strong id="transcriber-all-progress-label">No estimate</strong>
+                        </div>
+                        <div class="progress-bar"><span id="transcriber-all-progress"></span></div>
+                    </div>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="card-head compact">
+                    <h2>Settings</h2>
+                </div>
+
+                <label class="field toggle-row">
+                    <span>Transcriber enabled</span>
+                    <input id="transcriber-enabled" type="checkbox">
+                </label>
+                <small class="field-help">
+                    Offline experimental feature using a module-local
+                    whisper.cpp CLI and local models.
+                </small>
+
+                <label class="field">
+                    <span>Transcript directory</span>
+                    <input id="transcriber-output-dir" type="text" spellcheck="false">
+                </label>
+
+                <label class="field">
+                    <span>Source language</span>
+                    <input id="transcriber-language" type="text" spellcheck="false" placeholder="en">
+                    <small>Use whisper.cpp language codes such as en, es, fr, de, ja, or auto.</small>
+                </label>
+
+                <label class="field">
+                    <span>Transcript format</span>
+                    <select id="transcriber-output-format">
+                        <option value="txt">Plain text (.txt)</option>
+                        <option value="docx">Word document (.docx)</option>
+                    </select>
+                </label>
+
+                <label class="field">
+                    <span>whisper.cpp ABI manifest URL</span>
+                    <input id="transcriber-whisper-manifest-url" type="text" spellcheck="false">
+                    <small>Manifest generated by the transcriber-tools workflow.</small>
+                </label>
+
+                <label class="field">
+                    <span>whisper.cpp CLI URL override</span>
+                    <input id="transcriber-whisper-url" type="text" spellcheck="false">
+                    <small>Optional direct Android binary or zip containing whisper-cli. Leave blank for ABI auto-selection.</small>
+                </label>
+
+                <label class="field">
+                    <span>Whisper model URL</span>
+                    <input id="transcriber-model-url" type="text" spellcheck="false">
+                </label>
+
+                <label class="field">
+                    <span>TinyDiarize model URL</span>
+                    <input id="transcriber-tdrz-url" type="text" spellcheck="false">
+                </label>
+
+                <div class="dependency-list">
+                    <div>
+                        <span class="label">whisper.cpp CLI</span>
+                        <strong id="transcriber-whisper-path">Not checked</strong>
+                        <div class="progress-mini"><span id="component-whisper-progress"></span></div>
+                        <small id="component-whisper-status">Waiting</small>
+                    </div>
+                    <div>
+                        <span class="label">Whisper model</span>
+                        <strong id="transcriber-model-path">Not checked</strong>
+                        <div class="progress-mini"><span id="component-model-progress"></span></div>
+                        <small id="component-model-status">Waiting</small>
+                    </div>
+                    <div>
+                        <span class="label">TinyDiarize model</span>
+                        <strong id="transcriber-tdrz-path">Not checked</strong>
+                        <div class="progress-mini"><span id="component-tdrz-progress"></span></div>
+                        <small id="component-tdrz-status">Waiting</small>
+                    </div>
+                </div>
+
+                <div class="actions">
+                    <button id="save-transcriber-button" type="button">Save Transcriber</button>
+                    <button id="install-transcriber-deps-button" class="ghost" type="button">Prepare Components</button>
+                    <button id="remove-transcriber-deps-button" class="ghost danger" type="button">Remove Components</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="card-head">
+                    <h2>Recordings</h2>
+                    <div class="toolbar">
+                        <button id="refresh-recordings-for-transcriber-button" class="ghost" type="button">Refresh</button>
+                        <button id="select-all-recordings-button" class="ghost" type="button">Select All</button>
+                        <button id="clear-recording-selection-button" class="ghost" type="button">Clear</button>
+                    </div>
+                </div>
+                <div id="transcriber-recording-list" class="entry-list selectable-list">
+                    <p class="entry-empty">Loading recordings...</p>
+                </div>
+                <div class="actions">
+                    <button id="queue-selected-button" type="button">Queue Selected</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="card-head">
+                    <h2>Queue</h2>
+                    <div class="toolbar">
+                        <button id="pause-transcriber-button" class="ghost" type="button">Pause</button>
+                        <button id="resume-transcriber-button" class="ghost" type="button">Resume</button>
+                        <button id="stop-transcriber-button" class="ghost danger" type="button">Stop</button>
+                        <button id="clear-transcriber-queue-button" class="ghost" type="button">Clear Done</button>
+                    </div>
+                </div>
+                <div id="transcriber-queue-list" class="entry-list">
+                    <p class="entry-empty">No queued transcription jobs.</p>
+                </div>
+            </article>
+        </section>
+
         <section id="debug-view" class="view stack" hidden>
             <article class="card">
                 <div class="card-head">
@@ -139,6 +301,18 @@
                 <button id="confirm-clear-button" class="danger" type="button">Clear</button>
                 <button id="cancel-clear-button" class="ghost" type="button">Cancel</button>
             </div>
+        </div>
+    </div>
+
+    <div id="choice-overlay" class="confirm-overlay" hidden>
+        <div class="confirm-card">
+            <h2 id="choice-title">Confirm</h2>
+            <p id="choice-message"></p>
+            <label id="choice-checkbox-row" class="choice-checkbox" hidden>
+                <input id="choice-checkbox" type="checkbox">
+                <span id="choice-checkbox-label"></span>
+            </label>
+            <div id="choice-actions" class="actions compact-actions"></div>
         </div>
     </div>
 

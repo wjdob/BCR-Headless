@@ -26,6 +26,7 @@ class HeadlessRecorderSession(
     private val outputDir: File,
     private val minDurationSeconds: Int,
     private val direction: CallDirection?,
+    private val stereoEnabled: Boolean,
     private val listener: Listener,
 ) : Thread(HeadlessRecorderSession::class.java.simpleName) {
     interface Listener {
@@ -45,6 +46,7 @@ class HeadlessRecorderSession(
         val error: String?,
         val startedAt: ZonedDateTime?,
         val direction: CallDirection?,
+        val channelCount: Int?,
     )
 
     private var stopRequested = false
@@ -85,6 +87,7 @@ class HeadlessRecorderSession(
                         error = null,
                         startedAt = startedAt,
                         direction = direction,
+                        channelCount = info.channelCount,
                     ),
                 )
                 return
@@ -101,6 +104,7 @@ class HeadlessRecorderSession(
                     error = null,
                     startedAt = startedAt,
                     direction = direction,
+                    channelCount = info.channelCount,
                 ),
             )
         } catch (e: Exception) {
@@ -116,6 +120,7 @@ class HeadlessRecorderSession(
                     error = e.localizedMessage ?: e.javaClass.simpleName,
                     startedAt = startedAt,
                     direction = direction,
+                    channelCount = null,
                 ),
             )
         }
@@ -125,41 +130,32 @@ class HeadlessRecorderSession(
     private fun recordUntilStop(fd: java.io.FileDescriptor): RecordingInfo {
         AndroidProcess.setThreadPriority(AndroidProcess.THREAD_PRIORITY_URGENT_AUDIO)
 
-        val minBufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE.toInt(),
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        require(minBufferSize >= 0) {
-            "Failure when querying minimum buffer size: $minBufferSize"
-        }
-
-        val audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_CALL,
-            SAMPLE_RATE.toInt(),
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBufferSize * 6,
-        )
-        require(audioRecord.state == AudioRecord.STATE_INITIALIZED) {
-            "AudioRecord failed to initialize: state=${audioRecord.state}"
-        }
+        val recordingInput = createAudioRecord(stereoEnabled)
+        val audioRecord = recordingInput.audioRecord
 
         try {
             audioRecord.startRecording()
             require(audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 "AudioRecord failed to enter recording state: state=${audioRecord.recordingState}"
             }
-            println("AudioRecord started with VOICE_CALL source and buffer=${minBufferSize * 6}")
+            println(
+                "AudioRecord started with VOICE_CALL source, channels=${recordingInput.channelCount}, " +
+                    "buffer=${recordingInput.minBufferSize * 6}",
+            )
 
             val container = WaveFormat.getContainer(fd)
             try {
-                val mediaFormat = WaveFormat.getMediaFormat(1, SAMPLE_RATE, null)
+                val mediaFormat = WaveFormat.getMediaFormat(recordingInput.channelCount, SAMPLE_RATE, null)
                 val encoder = WaveFormat.getEncoder(mediaFormat, container)
 
                 try {
                     encoder.start()
-                    return encodeLoop(audioRecord, encoder, minBufferSize)
+                    return encodeLoop(
+                        audioRecord = audioRecord,
+                        encoder = encoder,
+                        bufferSize = recordingInput.minBufferSize,
+                        channelCount = recordingInput.channelCount,
+                    )
                 } finally {
                     encoder.stop()
                     encoder.release()
@@ -178,15 +174,62 @@ class HeadlessRecorderSession(
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun createAudioRecord(preferStereo: Boolean): RecordingInput {
+        val specs = buildList {
+            if (preferStereo) {
+                add(ChannelSpec(AudioFormat.CHANNEL_IN_STEREO, 2, "stereo"))
+            }
+            add(ChannelSpec(AudioFormat.CHANNEL_IN_MONO, 1, "mono"))
+        }
+
+        var lastError: String? = null
+
+        for (spec in specs) {
+            val minBufferSize = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE.toInt(),
+                spec.channelMask,
+                AudioFormat.ENCODING_PCM_16BIT,
+            )
+            if (minBufferSize < 0) {
+                lastError = "minimum buffer query failed for ${spec.label}: $minBufferSize"
+                println("Skipping ${spec.label} VOICE_CALL input: $lastError")
+                continue
+            }
+
+            val audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_CALL,
+                SAMPLE_RATE.toInt(),
+                spec.channelMask,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBufferSize * 6,
+            )
+            if (audioRecord.state == AudioRecord.STATE_INITIALIZED) {
+                if (preferStereo && spec.channelCount == 1) {
+                    println("Stereo VOICE_CALL input unavailable; falling back to mono")
+                }
+                return RecordingInput(audioRecord, spec.channelCount, minBufferSize)
+            }
+
+            lastError = "AudioRecord failed to initialize ${spec.label}: state=${audioRecord.state}"
+            audioRecord.release()
+            println("Skipping ${spec.label} VOICE_CALL input: $lastError")
+        }
+
+        throw IllegalStateException(lastError ?: "No VOICE_CALL input format is available")
+    }
+
     private fun encodeLoop(
         audioRecord: AudioRecord,
         encoder: Encoder,
         bufferSize: Int,
+        channelCount: Int,
     ): RecordingInfo {
         var numFramesTotal = 0L
         var numFramesEncoded = 0L
         var wasPureSilence = true
 
+        val frameSize = BYTES_PER_SAMPLE * channelCount
         val baseSize = bufferSize * 2
         val inputBuffer = ByteBuffer.allocateDirect(baseSize)
         val outputBuffer = ByteBuffer.allocate(baseSize)
@@ -208,7 +251,7 @@ class HeadlessRecorderSession(
             inputBuffer.position(0)
             inputBuffer.limit(oldPos + bytesRead)
 
-            interleaveMono(inputBuffer, outputBuffer)
+            copyPcm(inputBuffer, outputBuffer, frameSize)
             val writtenBytes = outputBuffer.limit()
 
             if (wasPureSilence) {
@@ -221,8 +264,8 @@ class HeadlessRecorderSession(
             }
 
             encoder.encode(outputBuffer, false)
-            numFramesTotal += writtenBytes / BYTES_PER_SAMPLE
-            numFramesEncoded += writtenBytes / BYTES_PER_SAMPLE
+            numFramesTotal += writtenBytes / frameSize
+            numFramesEncoded += writtenBytes / frameSize
 
             inputBuffer.compact()
             outputBuffer.clear()
@@ -244,6 +287,7 @@ class HeadlessRecorderSession(
             framesTotal = numFramesTotal,
             framesEncoded = numFramesEncoded,
             sampleRate = SAMPLE_RATE.toInt(),
+            channelCount = channelCount,
         )
     }
 
@@ -264,11 +308,12 @@ class HeadlessRecorderSession(
         private const val BYTES_PER_SAMPLE = 2
         private val TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
 
-        private fun interleaveMono(inputBuffer: ByteBuffer, outputBuffer: ByteBuffer) {
+        private fun copyPcm(inputBuffer: ByteBuffer, outputBuffer: ByteBuffer, frameSize: Int) {
             val bytesToCopy = min(inputBuffer.remaining(), outputBuffer.remaining())
-            val framesToCopy = bytesToCopy / BYTES_PER_SAMPLE
+            val alignedBytesToCopy = bytesToCopy - (bytesToCopy % frameSize)
+            val samplesToCopy = alignedBytesToCopy / BYTES_PER_SAMPLE
 
-            repeat(framesToCopy) {
+            repeat(samplesToCopy) {
                 outputBuffer.putShort(inputBuffer.getShort())
             }
 
@@ -281,6 +326,7 @@ class HeadlessRecorderSession(
         val framesTotal: Long,
         val framesEncoded: Long,
         val sampleRate: Int,
+        val channelCount: Int,
     ) {
         val durationSecsWall: Double
             get() = wallDurationNanos / 1_000_000_000.0
@@ -289,4 +335,16 @@ class HeadlessRecorderSession(
         val durationWall: Duration
             get() = Duration.ofNanos(wallDurationNanos)
     }
+
+    private data class RecordingInput(
+        val audioRecord: AudioRecord,
+        val channelCount: Int,
+        val minBufferSize: Int,
+    )
+
+    private data class ChannelSpec(
+        val channelMask: Int,
+        val channelCount: Int,
+        val label: String,
+    )
 }

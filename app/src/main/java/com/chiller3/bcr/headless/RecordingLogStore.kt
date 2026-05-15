@@ -19,6 +19,7 @@ data class RecordingLogEntry(
     val phoneNumber: String?,
     val status: String,
     val durationSeconds: Double?,
+    val audioChannels: Int? = null,
     val outputFile: String?,
     val error: String?,
 )

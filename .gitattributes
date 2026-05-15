@@ -1,0 +1,5 @@
+*.sh text eol=lf
+app/magisk/update-binary text eol=lf
+app/magisk/updater-script text eol=lf
+app/magisk/skip_mount text eol=lf
+scripts/*.env text eol=lf

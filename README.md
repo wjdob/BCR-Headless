@@ -1,6 +1,11 @@
-# BCR Headless
+# BCR Headless Test
 
 <img src="app/images/icon.svg" alt="app icon" width="72" />
+
+> Test build: this branch/package is temporarily labeled as
+> `BCR Headless Test` with module id `bcr.headless.test` and version
+> `1.1.0-test.1` so it can be installed beside the original `1.0.0`
+> `bcr.headless` release.
 
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless?sort=semver)](https://github.com/wjdob/BCR-Headless/releases/latest)
 [![license badge](https://img.shields.io/github/license/wjdob/BCR-Headless)](./LICENSE)
@@ -40,6 +45,9 @@ This design exists to reduce the user-space surface that security-sensitive apps
 * Optional in-module recording log with a dedicated WebUI view
 * Best-effort "Open output folder" action from the WebUI
 * Open individual recordings from the recorded-calls view
+* Experimental offline transcription queue with speaker-labeled transcripts
+* Optional experimental stereo uplink/downlink WAV capture for future diarization
+* ABI-aware transcriber component preparation for Android `whisper-cli`
 * Separate debug view for runtime status, probe output, and logs
 * Recording files saved directly to a plain filesystem path
 
@@ -48,6 +56,12 @@ This design exists to reduce the user-space surface that security-sensitive apps
 This rebuild is intentionally narrower than the original BCR app:
 
 * Output is currently WAV/PCM only
+* Transcription is experimental and depends on published transcriber tool
+  release assets plus local models
+* No cloud transcription backend is included
+* Speaker labels are best-effort diarization labels such as `Speaker A` and
+  `Speaker B`; mono recordings require a TinyDiarize-capable model, while
+  stereo recordings use whisper.cpp stereo diarization
 * The output path is a plain filesystem path, not a SAF tree. Don't ask for enhancement.
 * Auto-record rules are not ported
 * Contacts integration is not ported
@@ -87,6 +101,17 @@ The recordings screen is intended for review of captured recordings:
 * Open the recordings
 * Clear recording log
 
+The transcriber screen is intended for offline post-processing:
+
+* Enable or disable the experimental transcriber
+* Configure transcript directory, source language, and `.txt`/`.docx` output
+* Prepare module-local whisper.cpp/model component directories
+* Auto-select an Android `whisper-cli` package from the transcriber tools
+  manifest, or provide a direct URL override for testing
+* Select one, multiple, or all recordings for the queue
+* Skip, overwrite, or cancel when matching transcripts already exist
+* Pause, resume, stop, remove, and clear queued transcription jobs
+
 The debug screen is intended for troubleshooting:
 
 * Refresh runtime state
@@ -99,12 +124,15 @@ The debug screen is intended for troubleshooting:
 The module can also be controlled directly:
 
 ```bash
-su -c sh /data/adb/modules/bcr.headless/action.sh status
-su -c sh /data/adb/modules/bcr.headless/action.sh config list
-su -c sh /data/adb/modules/bcr.headless/action.sh reset-config
-su -c sh /data/adb/modules/bcr.headless/action.sh restart
-su -c sh /data/adb/modules/bcr.headless/action.sh probe
-su -c sh /data/adb/modules/bcr.headless/action.sh logs
+su -c sh /data/adb/modules/bcr.headless.test/action.sh status
+su -c sh /data/adb/modules/bcr.headless.test/action.sh config list
+su -c sh /data/adb/modules/bcr.headless.test/action.sh reset-config
+su -c sh /data/adb/modules/bcr.headless.test/action.sh restart
+su -c sh /data/adb/modules/bcr.headless.test/action.sh probe
+su -c sh /data/adb/modules/bcr.headless.test/action.sh logs
+su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber status
+su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber list
+su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber enqueue skip /sdcard/Recordings/BCR/example.wav
 ```
 
 ## Configuration Keys
@@ -115,13 +143,49 @@ The main module config keys are:
 * `output.dir`
 * `recording.min_duration`
 * `recording.log_enabled`
+* `recording.stereo`
+* `transcriber.enabled`
+* `transcriber.output_dir`
+* `transcriber.language`
+* `transcriber.output_format`
+* `transcriber.whisper_path`
+* `transcriber.model_path`
+* `transcriber.tinydiarize_model_path`
+* `transcriber.whisper_manifest_url`
+* `transcriber.whisper_url`
+* `transcriber.model_url`
+* `transcriber.tinydiarize_model_url`
+
+## Transcriber Native Tools
+
+The transcriber uses a repo-owned Android `whisper-cli` build instead of
+depending on upstream desktop release assets. The pinned whisper.cpp source and
+Android build matrix live in:
+
+```text
+scripts/transcriber-tools.env
+```
+
+To update whisper.cpp later, change `WHISPER_CPP_REF`, run the
+`Transcriber tools` workflow, and publish the generated assets. The workflow
+builds CPU-only generic packages for `arm64-v8a`, `armeabi-v7a`, and `x86_64`,
+then publishes:
+
+* `transcriber-tools.env`
+* `whisper-cli-android-<abi>.zip`
+* `SHA256SUMS`
+
+`Prepare Components` downloads the manifest, selects the best matching ABI from
+`ro.product.cpu.abilist`, verifies the package SHA-256, extracts `whisper-cli`,
+and runs a lightweight executable check before marking the component ready.
 
 ## Versioning
 
 This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
 
 * `1.x` for the standalone headless rebuild line
-* plain semantic version names such as `1.0.0`
+* `1.1.0-test.1` for this temporary parallel-install test build
+* plain semantic version names such as `1.0.0` for stable releases
 
 ## Building
 

@@ -68,22 +68,33 @@ fun getVersionCode(major: Int, minor: Int, patch: Int, commitCount: Int): Int {
     return major * 1_000_000 + minor * 10_000 + patch * 100 + commitCount.coerceAtMost(99)
 }
 
-fun getVersionName(major: Int, minor: Int, patch: Int): String {
-    return "$major.$minor.$patch"
+fun getVersionName(major: Int, minor: Int, patch: Int, suffix: String?): String {
+    val base = "$major.$minor.$patch"
+    return if (suffix.isNullOrBlank()) {
+        base
+    } else {
+        "$base-$suffix"
+    }
 }
 
 val git = Git.open(File(rootDir, ".git"))!!
 val gitVersionTriple = describeVersion(git)
 val projectVersionMajor = 1
-val projectVersionMinor = 0
+val projectVersionMinor = 1
 val projectVersionPatch = 0
+val projectVersionSuffix = "test.1"
 val gitVersionCode = getVersionCode(
     projectVersionMajor,
     projectVersionMinor,
     projectVersionPatch,
     gitVersionTriple.second,
 )
-val gitVersionName = getVersionName(projectVersionMajor, projectVersionMinor, projectVersionPatch)
+val gitVersionName = getVersionName(
+    projectVersionMajor,
+    projectVersionMinor,
+    projectVersionPatch,
+    projectVersionSuffix,
+)
 
 val projectUrl = providers.gradleProperty("projectUrl")
     .orElse("https://github.com/wjdob/BCR-Headless")
@@ -91,8 +102,8 @@ val projectUrl = providers.gradleProperty("projectUrl")
 val releaseMetadataBranch = providers.gradleProperty("releaseMetadataBranch")
     .orElse("main")
     .get()
-val moduleId = "bcr.headless"
-val moduleName = "BCR Headless"
+val moduleId = "bcr.headless.test"
+val moduleName = "BCR Headless Test"
 val releaseKeystore = providers.environmentVariable("RELEASE_KEYSTORE").orNull
 val hasCustomReleaseSigning = !releaseKeystore.isNullOrBlank()
 
@@ -107,7 +118,7 @@ android {
         // The helper APK is no longer installed as a package. It only provides
         // code for the headless daemon launched from the module directory via
         // app_process, so a stable internal-only id is sufficient here.
-        applicationId = "com.chiller3.bcr.headless"
+        applicationId = "com.chiller3.bcr.headless.test"
         minSdk = 28
         targetSdk = 36
         versionCode = gitVersionCode
@@ -251,7 +262,7 @@ androidComponents.onVariants { variant ->
             props["version"] = "v${variantVersionName.get()}"
             props["versionCode"] = variantVersionCode.get().toString()
             props["author"] = "wjdob"
-            props["description"] = "Headless call recorder rebuild with module WebUI"
+            props["description"] = "TEST BUILD | Headless call recorder rebuild with experimental transcription"
             props["updateJson"] = "${projectUrl}/raw/${releaseMetadataBranch}/app/magisk/updates/${variant.name}/info.json"
 
             outputFile.get().asFile.writeText(
@@ -297,6 +308,7 @@ androidComponents.onVariants { variant ->
             "action.sh",
             "module_common.sh",
             "customize.sh",
+            "uninstall.sh",
         )) {
             from(File(magiskDir, script)) {
                 filePermissions {

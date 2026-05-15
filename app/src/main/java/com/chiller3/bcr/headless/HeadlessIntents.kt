@@ -71,6 +71,28 @@ object HeadlessIntents {
         )
     }
 
+    fun createOpenTranscriptTarget(file: File): OpenTarget {
+        val canonicalFile = file.canonicalFile
+        val relative = resolvePrimaryExternalRelativePath(canonicalFile)
+        val uri = if (relative != null) {
+            DocumentsContract.buildDocumentUri(
+                DOCUMENTSUI_AUTHORITY,
+                "primary:$relative",
+            )
+        } else {
+            Uri.fromFile(canonicalFile)
+        }
+
+        return OpenTarget(
+            uri = uri,
+            mimeType = when (canonicalFile.extension.lowercase()) {
+                "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                "txt" -> "text/plain"
+                else -> "text/*"
+            },
+        )
+    }
+
     fun createOpenOutputDirIntent(outputDir: File): Intent {
         val target = createOpenOutputDirTarget(outputDir)
 

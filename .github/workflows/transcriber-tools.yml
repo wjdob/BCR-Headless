@@ -1,0 +1,89 @@
+name: Transcriber tools
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_ref:
+        description: 'Optional whisper.cpp tag or commit override'
+        required: false
+        type: string
+      publish:
+        description: 'Publish/update the transcriber-tools release assets'
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/transcriber-tools.yml'
+      - 'scripts/build-whisper-android.sh'
+      - 'scripts/transcriber-tools.env'
+
+jobs:
+  build:
+    name: Build Android whisper.cpp CLI packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Load tool config
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/transcriber-tools.env
+          if [[ -n "${{ inputs.whisper_ref }}" ]]; then
+              WHISPER_CPP_REF="${{ inputs.whisper_ref }}"
+          fi
+          {
+              echo "whisper_ref=${WHISPER_CPP_REF}"
+              echo "ndk=${ANDROID_NDK_VERSION}"
+              echo "cmake=${ANDROID_CMAKE_VERSION}"
+              echo "release_tag=${TOOLS_RELEASE_TAG}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
+              "ndk;${{ steps.config.outputs.ndk }}" \
+              "cmake;${{ steps.config.outputs.cmake }}"
+
+      - name: Build packages
+        shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ steps.config.outputs.ndk }}
+          CMAKE_BIN: ${{ env.ANDROID_HOME }}/cmake/${{ steps.config.outputs.cmake }}/bin/cmake
+          NINJA_BIN: ${{ env.ANDROID_HOME }}/cmake/${{ steps.config.outputs.cmake }}/bin/ninja
+          ASSET_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.config.outputs.release_tag }}
+          WHISPER_CPP_REF_OVERRIDE: ${{ steps.config.outputs.whisper_ref }}
+        run: bash scripts/build-whisper-android.sh
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-tools-${{ steps.config.outputs.whisper_ref }}
+          path: build/transcriber-tools/*
+          if-no-files-found: error
+
+      - name: Publish release assets
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.config.outputs.release_tag }}
+          WHISPER_REF: ${{ steps.config.outputs.whisper_ref }}
+        run: |
+          set -euo pipefail
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+              gh release upload "${RELEASE_TAG}" build/transcriber-tools/* --clobber
+          else
+              gh release create "${RELEASE_TAG}" build/transcriber-tools/* \
+                  --title "Transcriber tools" \
+                  --notes "Android whisper-cli packages built from ggml-org/whisper.cpp ${WHISPER_REF}."
+          fi
