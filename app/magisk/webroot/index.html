@@ -191,10 +191,14 @@
                 </label>
 
                 <label class="field">
-                    <span>whisper.cpp CLI URL override</span>
-                    <input id="transcriber-whisper-url" type="text" spellcheck="false">
-                    <small>Optional direct Android binary or zip containing whisper-cli. Leave blank for ABI auto-selection.</small>
+                    <span>Local whisper.cpp CLI package</span>
+                    <input id="transcriber-whisper-file" type="file">
+                    <small id="transcriber-whisper-local-status">No local package selected. Import a local Android whisper-cli binary or zip to use instead of ABI auto-selection.</small>
                 </label>
+                <div class="actions compact-actions">
+                    <button id="import-transcriber-whisper-file-button" class="ghost" type="button">Import Local Package</button>
+                    <button id="clear-transcriber-whisper-file-button" class="ghost danger" type="button">Clear Local Package</button>
+                </div>
 
                 <label class="field">
                     <span>Whisper model URL</span>

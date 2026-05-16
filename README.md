@@ -4,7 +4,7 @@
 
 > Test build: this branch/package is temporarily labeled as
 > `BCR Headless Test` with module id `bcr.headless.test` and version
-> `1.1.0-test.4` so it can be installed beside the original `1.0.0`
+> `1.1.0-test.5` so it can be installed beside the original `1.0.0`
 > `bcr.headless` release.
 
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
@@ -107,7 +107,7 @@ The transcriber screen is intended for offline post-processing:
 * Configure transcript directory, source language, and `.txt`/`.docx` output
 * Prepare module-local whisper.cpp/model component directories
 * Auto-select an Android `whisper-cli` package from the transcriber tools
-  manifest, or provide a direct URL override for testing
+  manifest, or import a local Android `whisper-cli` binary/zip package
 * Select one, multiple, or all recordings for the queue
 * Skip, overwrite, or cancel when matching transcripts already exist
 * Pause, resume, stop, remove, and clear queued transcription jobs
@@ -155,6 +155,7 @@ The main module config keys are:
 * `transcriber.model_path`
 * `transcriber.tinydiarize_model_path`
 * `transcriber.whisper_manifest_url`
+* `transcriber.whisper_local_path`
 * `transcriber.whisper_url`
 * `transcriber.model_url`
 * `transcriber.tinydiarize_model_url`
@@ -187,7 +188,7 @@ and runs a lightweight executable check before marking the component ready.
 This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
 
 * `1.x` for the standalone headless rebuild line
-* `1.1.0-test.4` for this temporary parallel-install test build
+* `1.1.0-test.5` for this temporary parallel-install test build
 * plain semantic version names such as `1.0.0` for stable releases
 
 ## Building

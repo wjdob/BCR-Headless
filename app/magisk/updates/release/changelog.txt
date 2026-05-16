@@ -1,9 +1,9 @@
-BCR Headless 1.1.0-test.4
+BCR Headless 1.1.0-test.5
 
-- Temporary public test build for side-by-side validation
-- Experimental offline transcription queue with speaker-labeled output
-- ABI-aware Android whisper.cpp CLI component preparation
-- Experimental stereo uplink/downlink recording toggle
-- Debug-gated transcriber status, component download, and job diagnostics
+- Fixed component preparation so ABI auto-select no longer presents a misleading "No URL configured" state
+- Added stronger downloader/extractor fallbacks and clearer component failure messages
+- Replaced the whisper.cpp CLI URL override UI with local package import and clearing controls
+- Removed automatic transcriber debug polling that could freeze KSUWebUI during refresh and scroll
+- Kept the build as a temporary side-by-side test package for parallel validation
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.4/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.5/CHANGELOG.md

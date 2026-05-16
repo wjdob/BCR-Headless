@@ -19,6 +19,10 @@ transcriber_stop_file="${state_dir}/transcriber.stop"
 transcriber_pause_file="${state_dir}/transcriber.pause"
 transcriber_components_file="${state_dir}/transcriber-components.env"
 transcriber_components_pid_file="${state_dir}/transcriber-components.pid"
+transcriber_manifest_cache="${state_dir}/transcriber-tools.env"
+transcriber_whisper_upload_tmp="${state_dir}/transcriber-whisper-local.upload"
+transcriber_whisper_upload_target_file="${state_dir}/transcriber-whisper-local.target"
+transcriber_whisper_local_package="${state_dir}/transcriber-whisper-local.package"
 transcriber_tools_dir="${mod_dir}/tools/transcriber"
 default_transcriber_tools_release_base_url="https://github.com/wjdob/BCR-Headless-Test/releases/download/transcriber-tools"
 default_whisper_manifest_url="${default_transcriber_tools_release_base_url}/transcriber-tools.env"
@@ -93,7 +97,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -197,6 +201,9 @@ ensure_defaults() {
     if ! config_get transcriber.whisper_url >/dev/null 2>&1; then
         config_set transcriber.whisper_url "${default_whisper_url}"
     fi
+    if ! config_get transcriber.whisper_local_path >/dev/null 2>&1; then
+        config_set transcriber.whisper_local_path ""
+    fi
     current_whisper_url=$(config_get_or_default transcriber.whisper_url "")
     if [ "${current_whisper_url}" = "${legacy_default_whisper_url}" ]; then
         config_set transcriber.whisper_url "${default_whisper_url}"
@@ -227,7 +234,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -467,6 +474,67 @@ detect_android_abi() {
     esac
 }
 
+toybox_supports() {
+    applet="${1}"
+    command -v toybox >/dev/null 2>&1 || return 1
+    toybox "${applet}" --help >/dev/null 2>&1
+}
+
+find_busybox() {
+    for candidate in "$(command -v busybox 2>/dev/null || true)" /data/adb/magisk/busybox /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox; do
+        [ -n "${candidate}" ] || continue
+        if [ -x "${candidate}" ]; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+busybox_supports() {
+    applet="${1}"
+    if ! busybox_bin=$(find_busybox); then
+        return 1
+    fi
+
+    "${busybox_bin}" "${applet}" --help >/dev/null 2>&1
+}
+
+start_download_process() {
+    url="${1}"
+    dest="${2}"
+    log_path="${3}"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail --show-error -o "${dest}" "${url}" >"${log_path}" 2>&1 &
+        download_pid="${!}"
+        download_tool="curl"
+        return 0
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "${dest}" "${url}" >"${log_path}" 2>&1 &
+        download_pid="${!}"
+        download_tool="wget"
+        return 0
+    fi
+    if toybox_supports wget; then
+        toybox wget -O "${dest}" "${url}" >"${log_path}" 2>&1 &
+        download_pid="${!}"
+        download_tool="toybox wget"
+        return 0
+    fi
+    if busybox_supports wget; then
+        busybox_bin=$(find_busybox)
+        "${busybox_bin}" wget -O "${dest}" "${url}" >"${log_path}" 2>&1 &
+        download_pid="${!}"
+        download_tool="busybox wget"
+        return 0
+    fi
+
+    return 127
+}
+
 manifest_get() {
     key="${1}"
     file="${2}"
@@ -477,14 +545,22 @@ manifest_get() {
 fetch_url_to_file() {
     url="${1}"
     dest="${2}"
+    log_path="${dest}.log"
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "${dest}" "${url}" >/dev/null 2>&1
-    elif command -v wget >/dev/null 2>&1; then
-        wget -O "${dest}" "${url}" >/dev/null 2>&1
-    else
-        return 2
+    rm -f "${dest}" "${log_path}"
+    if ! start_download_process "${url}" "${dest}" "${log_path}"; then
+        return 127
     fi
+
+    wait "${download_pid}"
+    result=$?
+    if [ "${result}" -ne 0 ] || [ ! -s "${dest}" ]; then
+        rm -f "${dest}"
+        return 1
+    fi
+
+    rm -f "${log_path}"
+    return 0
 }
 
 sha256_of_file() {
@@ -522,19 +598,47 @@ verify_sha256() {
 
 resolve_whisper_cli_component() {
     resolved_whisper_abi=$(detect_android_abi)
+    resolved_whisper_local_path=$(config_get_or_default transcriber.whisper_local_path "")
     resolved_whisper_url=$(config_get_or_default transcriber.whisper_url "${default_whisper_url}")
     resolved_whisper_sha256=""
     resolved_whisper_size="${default_whisper_size}"
     resolved_whisper_manifest_url=$(config_get_or_default transcriber.whisper_manifest_url "${default_whisper_manifest_url}")
+    resolved_whisper_source_kind=""
 
     component_status_set component.whisper_cli.abi "${resolved_whisper_abi}"
     component_status_set component.whisper_cli.manifest_url "${resolved_whisper_manifest_url}"
+    component_status_set component.whisper_cli.local_path "${resolved_whisper_local_path}"
+    component_status_set component.whisper_cli.error ""
+
+    if [ -n "${resolved_whisper_local_path}" ]; then
+        component_status_set component.whisper_cli.source_kind local
+        if [ ! -f "${resolved_whisper_local_path}" ]; then
+            component_status_set component.whisper_cli.status failed
+            component_status_set component.whisper_cli.error "Selected local whisper package is missing"
+            component_status_set component.whisper_cli.source_detail "${resolved_whisper_local_path}"
+            return 1
+        fi
+
+        resolved_whisper_size=$(file_size_bytes "${resolved_whisper_local_path}")
+        resolved_whisper_source_kind=local
+        component_status_set component.whisper_cli.url ""
+        component_status_set component.whisper_cli.sha256 ""
+        component_status_set component.whisper_cli.bytes_total "${resolved_whisper_size}"
+        component_status_set component.whisper_cli.source_detail "${resolved_whisper_local_path}"
+        return 0
+    fi
 
     if [ -n "${resolved_whisper_url}" ]; then
+        resolved_whisper_source_kind=url
+        component_status_set component.whisper_cli.source_kind url
         component_status_set component.whisper_cli.url "${resolved_whisper_url}"
+        component_status_set component.whisper_cli.source_detail "${resolved_whisper_url}"
         component_status_set component.whisper_cli.sha256 ""
         return 0
     fi
+
+    component_status_set component.whisper_cli.source_kind manifest
+    component_status_set component.whisper_cli.source_detail "${resolved_whisper_manifest_url}"
 
     if [ "${resolved_whisper_abi}" = "unknown" ]; then
         component_status_set component.whisper_cli.status failed
@@ -542,16 +646,22 @@ resolve_whisper_cli_component() {
         return 1
     fi
 
-    manifest_path="${state_dir}/transcriber-tools.env"
+    manifest_path="${transcriber_manifest_cache}"
     manifest_tmp="${manifest_path}.download"
     component_status_set component.whisper_cli.status resolving
     component_status_set component.whisper_cli.error ""
 
     if ! fetch_url_to_file "${resolved_whisper_manifest_url}" "${manifest_tmp}"; then
+        manifest_error=$(tail -n 5 "${manifest_tmp}.log" 2>/dev/null | one_line)
         rm -f "${manifest_tmp}"
         component_status_set component.whisper_cli.status failed
-        component_status_set component.whisper_cli.error "Unable to download transcriber tools manifest"
-        echo "[transcriber-components] unable to download manifest ${resolved_whisper_manifest_url}"
+        if [ -n "${manifest_error}" ]; then
+            component_status_set component.whisper_cli.error "Unable to download transcriber tools manifest: ${manifest_error}"
+            echo "[transcriber-components] unable to download manifest ${resolved_whisper_manifest_url}: ${manifest_error}"
+        else
+            component_status_set component.whisper_cli.error "Unable to download transcriber tools manifest"
+            echo "[transcriber-components] unable to download manifest ${resolved_whisper_manifest_url}"
+        fi
         return 1
     fi
     mv "${manifest_tmp}" "${manifest_path}"
@@ -570,6 +680,7 @@ resolve_whisper_cli_component() {
     component_status_set component.whisper_cli.whisper_commit "${manifest_commit}"
     component_status_set component.whisper_cli.build "${manifest_build}"
     component_status_set component.whisper_cli.bytes_total "${resolved_whisper_size}"
+    component_status_set component.whisper_cli.source_detail "${resolved_whisper_url}"
 
     if [ -z "${resolved_whisper_url}" ]; then
         component_status_set component.whisper_cli.status failed
@@ -586,11 +697,33 @@ component_status_reset() {
     model_path=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
     tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
     whisper_url=$(config_get_or_default transcriber.whisper_url "${default_whisper_url}")
+    whisper_local_path=$(config_get_or_default transcriber.whisper_local_path "")
     whisper_manifest_url=$(config_get_or_default transcriber.whisper_manifest_url "${default_whisper_manifest_url}")
     whisper_abi=$(detect_android_abi)
     model_url=$(config_get_or_default transcriber.model_url "${default_model_url}")
     tdrz_model_url=$(config_get_or_default transcriber.tinydiarize_model_url "${default_tinydiarize_model_url}")
-    total_estimated=$((default_whisper_size + default_model_size + default_tinydiarize_model_size))
+    whisper_source_kind=manifest
+    whisper_source_detail="${whisper_manifest_url}"
+    whisper_bytes_total="${default_whisper_size}"
+    whisper_initial_status=missing
+    whisper_initial_error=""
+
+    if [ -n "${whisper_local_path}" ]; then
+        whisper_source_kind=local
+        whisper_source_detail="${whisper_local_path}"
+        if [ -f "${whisper_local_path}" ]; then
+            whisper_bytes_total=$(file_size_bytes "${whisper_local_path}")
+            whisper_initial_status=selected
+        else
+            whisper_initial_status=failed
+            whisper_initial_error="Selected local whisper package is missing"
+        fi
+    elif [ -n "${whisper_url}" ]; then
+        whisper_source_kind=url
+        whisper_source_detail="${whisper_url}"
+    fi
+
+    total_estimated=$((whisper_bytes_total + default_model_size + default_tinydiarize_model_size))
 
     cat > "${transcriber_components_file}" <<EOF
 transcriber.components.state=idle
@@ -604,12 +737,16 @@ component.whisper_cli.label=whisper.cpp CLI package
 component.whisper_cli.status=missing
 component.whisper_cli.progress=0
 component.whisper_cli.bytes_downloaded=0
-component.whisper_cli.bytes_total=${default_whisper_size}
+component.whisper_cli.bytes_total=${whisper_bytes_total}
 component.whisper_cli.abi=${whisper_abi}
 component.whisper_cli.manifest_url=${whisper_manifest_url}
 component.whisper_cli.path=${whisper_path}
 component.whisper_cli.url=${whisper_url}
+component.whisper_cli.local_path=${whisper_local_path}
+component.whisper_cli.source_kind=${whisper_source_kind}
+component.whisper_cli.source_detail=${whisper_source_detail}
 component.whisper_cli.sha256=
+component.whisper_cli.error=${whisper_initial_error}
 component.base_model.label=Whisper base English model
 component.base_model.status=missing
 component.base_model.progress=0
@@ -625,6 +762,10 @@ component.tinydiarize_model.bytes_total=${default_tinydiarize_model_size}
 component.tinydiarize_model.path=${tdrz_model_path}
 component.tinydiarize_model.url=${tdrz_model_url}
 EOF
+
+    if [ "${whisper_initial_status}" != "missing" ]; then
+        component_status_set component.whisper_cli.status "${whisper_initial_status}"
+    fi
 
     if [ -f "${whisper_path}" ]; then
         if verify_whisper_cli_executable "${whisper_path}"; then
@@ -652,7 +793,9 @@ print_transcriber_components_status() {
     ensure_dirs
     ensure_defaults
 
-    if [ ! -f "${transcriber_components_file}" ]; then
+    if [ ! -f "${transcriber_components_file}" ] ||
+        ! grep -q '^component\.whisper_cli\.source_kind=' "${transcriber_components_file}" 2>/dev/null ||
+        ! grep -q '^component\.whisper_cli\.local_path=' "${transcriber_components_file}" 2>/dev/null; then
         component_status_reset
     fi
 
@@ -692,20 +835,38 @@ is_zip_file() {
     [ "${magic}" = "PK" ]
 }
 
+extract_zip_entry_to_file() {
+    package="${1}"
+    entry="${2}"
+    dest="${3}"
+
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -p "${package}" "${entry}" > "${dest}" 2>/dev/null
+        return $?
+    fi
+    if toybox_supports unzip; then
+        toybox unzip -p "${package}" "${entry}" > "${dest}" 2>/dev/null
+        return $?
+    fi
+    if busybox_supports unzip; then
+        busybox_bin=$(find_busybox)
+        "${busybox_bin}" unzip -p "${package}" "${entry}" > "${dest}" 2>/dev/null
+        return $?
+    fi
+
+    return 127
+}
+
 extract_whisper_cli() {
     package="${1}"
     dest="${2}"
     extracted="${dest}.extract"
 
-    if ! command -v unzip >/dev/null 2>&1; then
-        return 1
-    fi
-
     rm -f "${extracted}"
-    unzip -p "${package}" "whisper-cli" > "${extracted}" 2>/dev/null ||
-        unzip -p "${package}" "*/whisper-cli" > "${extracted}" 2>/dev/null ||
-        unzip -p "${package}" "whisper-cli.exe" > "${extracted}" 2>/dev/null ||
-        unzip -p "${package}" "*/whisper-cli.exe" > "${extracted}" 2>/dev/null
+    extract_zip_entry_to_file "${package}" "whisper-cli" "${extracted}" ||
+        extract_zip_entry_to_file "${package}" "*/whisper-cli" "${extracted}" ||
+        extract_zip_entry_to_file "${package}" "whisper-cli.exe" "${extracted}" ||
+        extract_zip_entry_to_file "${package}" "*/whisper-cli.exe" "${extracted}"
 
     if [ -s "${extracted}" ]; then
         mv "${extracted}" "${dest}"
@@ -715,6 +876,27 @@ extract_whisper_cli() {
 
     rm -f "${extracted}"
     return 1
+}
+
+append_base64_to_file() {
+    encoded="${1}"
+    dest="${2}"
+
+    if command -v base64 >/dev/null 2>&1; then
+        printf '%s' "${encoded}" | base64 -d >> "${dest}" 2>/dev/null
+        return $?
+    fi
+    if toybox_supports base64; then
+        printf '%s' "${encoded}" | toybox base64 -d >> "${dest}" 2>/dev/null
+        return $?
+    fi
+    if busybox_supports base64; then
+        busybox_bin=$(find_busybox)
+        printf '%s' "${encoded}" | "${busybox_bin}" base64 -d >> "${dest}" 2>/dev/null
+        return $?
+    fi
+
+    return 127
 }
 
 verify_whisper_cli_executable() {
@@ -738,16 +920,22 @@ verify_whisper_cli_executable() {
 
 download_component() {
     component="${1}"
-    url="${2}"
-    dest="${3}"
-    estimated_size="${4}"
-    extract_mode="${5}"
-    expected_sha256="${6:-}"
+    source_value="${2}"
+    source_kind="${3}"
+    dest="${4}"
+    estimated_size="${5}"
+    extract_mode="${6}"
+    expected_sha256="${7:-}"
     tmp="${dest}.download"
     download_log="${tmp}.log"
+    source_detail="${source_value}"
 
     component_status_set "component.${component}.path" "${dest}"
-    component_status_set "component.${component}.url" "${url}"
+    component_status_set "component.${component}.source_kind" "${source_kind}"
+    component_status_set "component.${component}.source_detail" "${source_detail}"
+    if [ "${source_kind}" = "url" ] || [ "${source_kind}" = "manifest" ]; then
+        component_status_set "component.${component}.url" "${source_value}"
+    fi
     component_status_set "component.${component}.bytes_total" "${estimated_size}"
     component_status_set "component.${component}.sha256" "${expected_sha256}"
 
@@ -768,9 +956,13 @@ download_component() {
         fi
     fi
 
-    if [ -z "${url}" ]; then
+    if [ -z "${source_value}" ]; then
         component_status_set "component.${component}.status" failed
-        component_status_set "component.${component}.error" "No download URL configured"
+        if [ "${source_kind}" = "local" ]; then
+            component_status_set "component.${component}.error" "No local whisper package selected"
+        else
+            component_status_set "component.${component}.error" "No download source configured"
+        fi
         return 1
     fi
 
@@ -782,50 +974,63 @@ download_component() {
     component_status_set "component.${component}.bytes_downloaded" 0
     component_status_set "component.${component}.error" ""
 
-    echo "[transcriber-components] downloading ${component} from ${url}"
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -L --fail --show-error -o "${tmp}" "${url}" >"${download_log}" 2>&1 &
-        download_pid="${!}"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -O "${tmp}" "${url}" >"${download_log}" 2>&1 &
-        download_pid="${!}"
-    else
-        component_status_set "component.${component}.status" failed
-        component_status_set "component.${component}.error" "No curl or wget found"
-        return 1
-    fi
-
-    while kill -0 "${download_pid}" 2>/dev/null; do
-        downloaded=$(file_size_bytes "${tmp}")
-        if [ "${estimated_size}" -gt 0 ]; then
-            progress=$((downloaded * 100 / estimated_size))
-            [ "${progress}" -gt 99 ] && progress=99
-        else
-            progress=0
+    if [ "${source_kind}" = "local" ]; then
+        component_status_set "component.${component}.status" installing
+        if ! cat "${source_value}" > "${tmp}" 2>"${download_log}"; then
+            install_error=$(tail -n 5 "${download_log}" 2>/dev/null | one_line)
+            [ -n "${install_error}" ] || install_error="Unable to read local package"
+            rm -f "${tmp}"
+            component_status_set "component.${component}.status" failed
+            component_status_set "component.${component}.progress" 0
+            component_status_set "component.${component}.error" "Local package install failed: ${install_error}"
+            echo "[transcriber-components] ${component} local package install failed: ${install_error}"
+            return 1
         fi
+        downloaded=$(file_size_bytes "${tmp}")
         component_status_set "component.${component}.bytes_downloaded" "${downloaded}"
-        component_status_set "component.${component}.progress" "${progress}"
-        sleep 1
-    done
+        component_status_set "component.${component}.progress" 100
+        rm -f "${download_log}"
+    else
+        echo "[transcriber-components] downloading ${component} from ${source_value}"
+        if ! start_download_process "${source_value}" "${tmp}" "${download_log}"; then
+            component_status_set "component.${component}.status" failed
+            component_status_set "component.${component}.error" "No compatible downloader found (tried curl, wget, toybox wget, busybox wget)"
+            echo "[transcriber-components] ${component} failed: no compatible downloader found"
+            return 1
+        fi
+        echo "[transcriber-components] ${component} downloader=${download_tool}"
 
-    wait "${download_pid}"
-    result=$?
-    downloaded=$(file_size_bytes "${tmp}")
-    component_status_set "component.${component}.bytes_downloaded" "${downloaded}"
+        while kill -0 "${download_pid}" 2>/dev/null; do
+            downloaded=$(file_size_bytes "${tmp}")
+            if [ "${estimated_size}" -gt 0 ]; then
+                progress=$((downloaded * 100 / estimated_size))
+                [ "${progress}" -gt 99 ] && progress=99
+            else
+                progress=0
+            fi
+            component_status_set "component.${component}.bytes_downloaded" "${downloaded}"
+            component_status_set "component.${component}.progress" "${progress}"
+            sleep 1
+        done
 
-    if [ "${result}" -ne 0 ] || [ ! -s "${tmp}" ]; then
-        download_error=$(tail -n 5 "${download_log}" 2>/dev/null | one_line)
-        [ -n "${download_error}" ] || download_error="exit ${result}"
-        echo "[transcriber-components] ${component} download failed: ${download_error}"
-        rm -f "${tmp}"
-        component_status_set "component.${component}.status" failed
-        component_status_set "component.${component}.progress" 0
-        component_status_set "component.${component}.error" "Download failed: ${download_error}"
-        return 1
+        wait "${download_pid}"
+        result=$?
+        downloaded=$(file_size_bytes "${tmp}")
+        component_status_set "component.${component}.bytes_downloaded" "${downloaded}"
+
+        if [ "${result}" -ne 0 ] || [ ! -s "${tmp}" ]; then
+            download_error=$(tail -n 8 "${download_log}" 2>/dev/null | one_line)
+            [ -n "${download_error}" ] || download_error="exit ${result}"
+            echo "[transcriber-components] ${component} download failed: ${download_error}"
+            rm -f "${tmp}"
+            component_status_set "component.${component}.status" failed
+            component_status_set "component.${component}.progress" 0
+            component_status_set "component.${component}.error" "Download failed (${download_tool:-unknown}): ${download_error}"
+            return 1
+        fi
+
+        rm -f "${download_log}"
     fi
-
-    rm -f "${download_log}"
 
     if [ -n "${expected_sha256}" ]; then
         component_status_set "component.${component}.status" verifying
@@ -890,7 +1095,7 @@ install_transcriber_dependencies_foreground() {
     failed_names=""
 
     if resolve_whisper_cli_component; then
-        if ! download_component whisper_cli "${resolved_whisper_url}" "${whisper_path}" "${resolved_whisper_size}" whisper_cli "${resolved_whisper_sha256}"; then
+        if ! download_component whisper_cli "${resolved_whisper_local_path:-${resolved_whisper_url}}" "${resolved_whisper_source_kind:-manifest}" "${whisper_path}" "${resolved_whisper_size}" whisper_cli "${resolved_whisper_sha256}"; then
             failed=1
             failed_names="${failed_names} whisper.cpp-cli"
         fi
@@ -898,11 +1103,11 @@ install_transcriber_dependencies_foreground() {
         failed=1
         failed_names="${failed_names} whisper.cpp-cli"
     fi
-    if ! download_component base_model "${model_url}" "${model_path}" "${default_model_size}" direct ""; then
+    if ! download_component base_model "${model_url}" url "${model_path}" "${default_model_size}" direct ""; then
         failed=1
         failed_names="${failed_names} base-model"
     fi
-    if ! download_component tinydiarize_model "${tdrz_model_url}" "${tdrz_model_path}" "${default_tinydiarize_model_size}" direct ""; then
+    if ! download_component tinydiarize_model "${tdrz_model_url}" url "${tdrz_model_path}" "${default_tinydiarize_model_size}" direct ""; then
         failed=1
         failed_names="${failed_names} tinydiarize-model"
     fi
@@ -946,8 +1151,59 @@ install_transcriber_dependencies() {
 
 remove_transcriber_dependencies() {
     rm -rf "${transcriber_tools_dir}"
-    rm -f "${transcriber_pid_file}" "${transcriber_runtime_file}" "${transcriber_stop_file}" "${transcriber_pause_file}" "${transcriber_components_file}" "${transcriber_components_pid_file}"
+    rm -f "${transcriber_pid_file}" "${transcriber_runtime_file}" "${transcriber_stop_file}" "${transcriber_pause_file}" "${transcriber_components_file}" "${transcriber_components_pid_file}" "${transcriber_whisper_upload_tmp}" "${transcriber_whisper_upload_target_file}"
     rm -rf "${state_dir}/transcriber-work"
+}
+
+begin_transcriber_whisper_upload() {
+    filename="${1}"
+
+    ensure_dirs
+    rm -f "${transcriber_whisper_upload_tmp}"
+    : > "${transcriber_whisper_upload_tmp}"
+    printf '%s' "${filename}" > "${transcriber_whisper_upload_target_file}"
+}
+
+append_transcriber_whisper_upload() {
+    encoded="${1}"
+
+    ensure_dirs
+    touch "${transcriber_whisper_upload_tmp}"
+    if ! append_base64_to_file "${encoded}" "${transcriber_whisper_upload_tmp}"; then
+        echo "Unable to decode base64 upload chunk on this device (tried base64, toybox base64, busybox base64)" >&2
+        return 1
+    fi
+
+    echo "transcriber.whisper_upload.bytes=$(file_size_bytes "${transcriber_whisper_upload_tmp}")"
+}
+
+commit_transcriber_whisper_upload() {
+    ensure_dirs
+
+    if [ ! -s "${transcriber_whisper_upload_tmp}" ]; then
+        echo "No uploaded whisper package is staged" >&2
+        return 1
+    fi
+
+    mv "${transcriber_whisper_upload_tmp}" "${transcriber_whisper_local_package}"
+    rm -f "${transcriber_whisper_upload_target_file}"
+    config_set transcriber.whisper_local_path "${transcriber_whisper_local_package}"
+    config_set transcriber.whisper_url ""
+    component_status_reset
+}
+
+clear_transcriber_whisper_upload() {
+    rm -f "${transcriber_whisper_upload_tmp}" "${transcriber_whisper_upload_target_file}"
+}
+
+clear_transcriber_whisper_local_package() {
+    local_path=$(config_get_or_default transcriber.whisper_local_path "")
+    if [ -n "${local_path}" ]; then
+        rm -f "${local_path}"
+    fi
+    config_set transcriber.whisper_local_path ""
+    clear_transcriber_whisper_upload
+    component_status_reset
 }
 
 print_status() {
@@ -978,9 +1234,16 @@ print_status() {
     echo "transcriber.device_abi=$(detect_android_abi)"
     echo "transcriber.whisper_manifest_url=$(config_get_or_default transcriber.whisper_manifest_url "${default_whisper_manifest_url}")"
     echo "transcriber.whisper_url=$(config_get_or_default transcriber.whisper_url "${default_whisper_url}")"
+    echo "transcriber.whisper_local_path=$(config_get_or_default transcriber.whisper_local_path "")"
     echo "transcriber.model_url=$(config_get_or_default transcriber.model_url "${default_model_url}")"
     echo "transcriber.tinydiarize_model_url=$(config_get_or_default transcriber.tinydiarize_model_url "${default_tinydiarize_model_url}")"
-    echo "transcriber.components.estimated_bytes=$((default_whisper_size + default_model_size + default_tinydiarize_model_size))"
+    status_whisper_local_path=$(config_get_or_default transcriber.whisper_local_path "")
+    if [ -n "${status_whisper_local_path}" ] && [ -f "${status_whisper_local_path}" ]; then
+        status_whisper_size=$(file_size_bytes "${status_whisper_local_path}")
+    else
+        status_whisper_size="${default_whisper_size}"
+    fi
+    echo "transcriber.components.estimated_bytes=$((status_whisper_size + default_model_size + default_tinydiarize_model_size))"
     echo "daemon.running=$(bool_string is_daemon_running)"
     echo "daemon.pid=$(cat "${pid_file}" 2>/dev/null || true)"
     clear_stale_transcriber_pid

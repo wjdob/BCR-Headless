@@ -62,7 +62,10 @@ const transcriberOutputDir = document.querySelector("#transcriber-output-dir");
 const transcriberLanguage = document.querySelector("#transcriber-language");
 const transcriberOutputFormat = document.querySelector("#transcriber-output-format");
 const transcriberWhisperManifestUrl = document.querySelector("#transcriber-whisper-manifest-url");
-const transcriberWhisperUrl = document.querySelector("#transcriber-whisper-url");
+const transcriberWhisperFile = document.querySelector("#transcriber-whisper-file");
+const transcriberWhisperLocalStatus = document.querySelector("#transcriber-whisper-local-status");
+const importTranscriberWhisperFileButton = document.querySelector("#import-transcriber-whisper-file-button");
+const clearTranscriberWhisperFileButton = document.querySelector("#clear-transcriber-whisper-file-button");
 const transcriberModelUrl = document.querySelector("#transcriber-model-url");
 const transcriberTdrzUrl = document.querySelector("#transcriber-tdrz-url");
 const transcriberEngineState = document.querySelector("#transcriber-engine-state");
@@ -93,6 +96,7 @@ const timestampFormatter = new Intl.DateTimeFormat(undefined, {
     second: "2-digit",
     timeZoneName: "short",
 });
+const LOCAL_WHISPER_UPLOAD_CHUNK_BYTES = 24 * 1024;
 
 let confirmResolver = null;
 let choiceResolver = null;
@@ -101,7 +105,6 @@ let latestTranscriberStatus = null;
 let latestComponentsStatus = {};
 let latestRecordingCandidates = [];
 let componentPollTimer = null;
-let debugPollTimer = null;
 let activeTabName = "recorder";
 
 function shellQuote(value) {
@@ -201,6 +204,13 @@ function setActiveTab(name) {
     transcriberTab.classList.toggle("ghost", !isTranscriber);
     debugTab.classList.toggle("active", isDebug);
     debugTab.classList.toggle("ghost", !isDebug);
+
+    if (!isTranscriber) {
+        stopComponentPolling();
+    } else if (latestComponentsStatus["transcriber.components.running"] === "1") {
+        startComponentPolling();
+    }
+
     updateDebugControls();
 }
 
@@ -219,9 +229,9 @@ function updateUiFromStatus(values) {
     transcriberLanguage.value = values["transcriber.language"] || "en";
     transcriberOutputFormat.value = values["transcriber.output_format"] || "txt";
     transcriberWhisperManifestUrl.value = values["transcriber.whisper_manifest_url"] || "";
-    transcriberWhisperUrl.value = values["transcriber.whisper_url"] || "";
     transcriberModelUrl.value = values["transcriber.model_url"] || "";
     transcriberTdrzUrl.value = values["transcriber.tinydiarize_model_url"] || "";
+    updateTranscriberWhisperLocalStatus(values, latestComponentsStatus);
 
     const running = values["daemon.running"] === "1";
     const recorderState = enabled
@@ -381,9 +391,6 @@ async function refreshAll() {
         await refreshTranscriberStatus();
         await refreshTranscriberRecordings();
     }
-    if (activeTabName === "debug") {
-        await refreshTranscriberDebug();
-    }
 }
 
 async function openLastOutputTarget() {
@@ -489,9 +496,6 @@ async function refreshTranscriberAll() {
     await refreshTranscriberStatus();
     await refreshTranscriberComponentsStatus();
     await refreshTranscriberRecordings();
-    if (activeTabName === "debug") {
-        await refreshTranscriberDebug();
-    }
 }
 
 function renderTranscriberStatus(status) {
@@ -560,6 +564,7 @@ function renderTranscriberComponents(values) {
         componentTdrzProgress,
         componentTdrzStatus,
     );
+    updateTranscriberWhisperLocalStatus(latestStatus, values);
 }
 
 function renderComponent(values, key, pathEl, progressEl, statusEl) {
@@ -570,20 +575,75 @@ function renderComponent(values, key, pathEl, progressEl, statusEl) {
     const total = Number(values[`${prefix}bytes_total`] || 0);
     const error = values[`${prefix}error`] || "";
     const path = values[`${prefix}path`] || "Not set";
-    const url = values[`${prefix}url`] || "No URL configured";
-    const manifestUrl = values[`${prefix}manifest_url`] || "";
     const abi = values[`${prefix}abi`] || "";
     const build = values[`${prefix}build`] || "";
     const whisperRef = values[`${prefix}whisper_ref`] || "";
     const detail = [status, abi, build, whisperRef].filter(Boolean).join(", ");
     const shownProgress = status === "ready" ? 100 : progress;
+    const source = formatComponentSource(values, prefix);
 
     pathEl.textContent = `${path} (${detail})`;
     progressEl.style.width = `${shownProgress}%`;
-    const source = url !== "No URL configured" ? url : manifestUrl || url;
     statusEl.textContent = error
         ? `${status}: ${error} • ${source}`
         : `${status} • ${formatBytes(downloaded)} / ${formatBytes(total)} • ${shownProgress}% • ${source}`;
+}
+
+function formatComponentSource(values, prefix) {
+    const sourceKind = values[`${prefix}source_kind`] || "";
+    const sourceDetail = values[`${prefix}source_detail`] || "";
+    const url = values[`${prefix}url`] || "";
+    const manifestUrl = values[`${prefix}manifest_url`] || "";
+    const localPath = values[`${prefix}local_path`] || "";
+
+    if (sourceKind === "local") {
+        return `Local package • ${basename(sourceDetail || localPath || "whisper-cli")}`;
+    }
+    if (sourceKind === "manifest") {
+        if (sourceDetail && manifestUrl && sourceDetail !== manifestUrl) {
+            return `ABI auto-select • ${basename(sourceDetail)} via manifest`;
+        }
+        return `ABI auto-select • ${manifestUrl || "Manifest not set"}`;
+    }
+    if (sourceKind === "url") {
+        return `Direct URL • ${sourceDetail || url || "Not set"}`;
+    }
+
+    return sourceDetail || localPath || url || manifestUrl || "No source configured";
+}
+
+function updateTranscriberWhisperLocalStatus(values = latestStatus, components = latestComponentsStatus) {
+    if (!transcriberWhisperLocalStatus) {
+        return;
+    }
+
+    const selectedFile = transcriberWhisperFile?.files?.[0];
+    if (selectedFile) {
+        transcriberWhisperLocalStatus.textContent =
+            `Selected ${selectedFile.name} • ${formatBytes(selectedFile.size)} • press Import Local Package`;
+        return;
+    }
+
+    const localPath = values["transcriber.whisper_local_path"] || components["component.whisper_cli.local_path"] || "";
+    const componentStatus = components["component.whisper_cli.status"] || "missing";
+    const componentError = components["component.whisper_cli.error"] || "";
+    const componentSize = Number(components["component.whisper_cli.bytes_total"] || 0);
+
+    if (!localPath) {
+        transcriberWhisperLocalStatus.textContent =
+            "No local package selected. Import a local Android whisper-cli binary or zip to use instead of ABI auto-selection.";
+        return;
+    }
+
+    const stateText = componentError
+        ? componentError
+        : componentStatus === "selected"
+            ? "ready to install"
+            : componentStatus === "ready"
+                ? "installed source"
+                : "local source selected";
+    const sizeText = componentSize > 0 ? ` • ${formatBytes(componentSize)}` : "";
+    transcriberWhisperLocalStatus.textContent = `${basename(localPath)}${sizeText} • ${stateText}`;
 }
 
 function renderTranscriberRecordings(recordings) {
@@ -713,7 +773,6 @@ async function saveTranscriberConfig() {
     const language = transcriberLanguage.value.trim() || "en";
     const format = transcriberOutputFormat.value || "txt";
     const whisperManifestUrl = transcriberWhisperManifestUrl.value.trim();
-    const whisperUrl = transcriberWhisperUrl.value.trim();
     const modelUrl = transcriberModelUrl.value.trim();
     const tdrzUrl = transcriberTdrzUrl.value.trim();
 
@@ -758,11 +817,12 @@ async function saveTranscriberConfig() {
             `sh ./action.sh config set transcriber.language ${shellQuote(language)}`,
             `sh ./action.sh config set transcriber.output_format ${shellQuote(format)}`,
             `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(whisperManifestUrl)}`,
-            `sh ./action.sh config set transcriber.whisper_url ${shellQuote(whisperUrl)}`,
+            `sh ./action.sh config set transcriber.whisper_url ''`,
             `sh ./action.sh config set transcriber.model_url ${shellQuote(modelUrl)}`,
             `sh ./action.sh config set transcriber.tinydiarize_model_url ${shellQuote(tdrzUrl)}`,
         ].join(" && "),
     );
+    await run("sh ./action.sh transcriber components-reset");
 
     if (willEnable) {
         await run("sh ./action.sh transcriber start-worker");
@@ -770,6 +830,61 @@ async function saveTranscriberConfig() {
 
     toast("Transcriber settings saved");
     await refreshTranscriberAll();
+}
+
+function bytesToBase64(bytes) {
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 0x8000) {
+        const slice = bytes.subarray(index, index + 0x8000);
+        binary += String.fromCharCode(...slice);
+    }
+    return btoa(binary);
+}
+
+async function importLocalWhisperFile() {
+    const file = transcriberWhisperFile?.files?.[0];
+    if (!file) {
+        toast("Choose a local whisper package first");
+        return;
+    }
+
+    await run(`sh ./action.sh transcriber local-whisper begin ${shellQuote(file.name)}`);
+    transcriberWhisperLocalStatus.textContent = `Importing ${file.name} • 0%`;
+
+    try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let uploaded = 0;
+
+        while (uploaded < bytes.length) {
+            const slice = bytes.subarray(uploaded, uploaded + LOCAL_WHISPER_UPLOAD_CHUNK_BYTES);
+            const encoded = bytesToBase64(slice);
+            await run(`sh ./action.sh transcriber local-whisper append-base64 ${shellQuote(encoded)}`);
+            uploaded += slice.length;
+            const progress = bytes.length ? Math.round((uploaded * 100) / bytes.length) : 100;
+            transcriberWhisperLocalStatus.textContent =
+                `Importing ${file.name} • ${progress}% • ${formatBytes(uploaded)} / ${formatBytes(bytes.length)}`;
+        }
+
+        await run("sh ./action.sh transcriber local-whisper commit");
+        transcriberWhisperFile.value = "";
+        toast(`Imported ${file.name}`);
+        await refreshStatus();
+        await refreshTranscriberComponentsStatus();
+    } catch (error) {
+        await runCapture("sh ./action.sh transcriber local-whisper cancel");
+        updateTranscriberWhisperLocalStatus();
+        throw error;
+    }
+}
+
+async function clearLocalWhisperFile() {
+    await run("sh ./action.sh transcriber local-whisper clear");
+    if (transcriberWhisperFile) {
+        transcriberWhisperFile.value = "";
+    }
+    toast("Local whisper package cleared");
+    await refreshStatus();
+    await refreshTranscriberComponentsStatus();
 }
 
 async function queueSelectedRecordings() {
@@ -929,13 +1044,10 @@ function updateDebugControls() {
         }
     }
 
-    if (enabled && activeTabName === "debug") {
-        startDebugPolling();
-    } else {
-        stopDebugPolling();
-        if (!enabled) {
-            setDebugOutputs("Debug tracking is disabled.");
-        }
+    if (!enabled) {
+        setDebugOutputs("Debug tracking is disabled.");
+    } else if (activeTabName === "debug" && debugTranscriberStatusOutput?.textContent === "Debug tracking is disabled.") {
+        setDebugOutputs("Debug tracking is enabled. Use Refresh Transcriber Debug when needed.");
     }
 }
 
@@ -945,76 +1057,52 @@ async function refreshTranscriberDebug() {
         return;
     }
 
-    const [components, status, logs] = await Promise.all([
-        runCapture("sh ./action.sh transcriber components-status"),
-        runCapture("sh ./action.sh transcriber status"),
-        runCapture("sh ./action.sh transcriber logs"),
-    ]);
-
+    debugComponentsOutput.textContent = "Refreshing component status...";
+    const components = await runCapture("sh ./action.sh transcriber components-status");
     debugComponentsOutput.textContent = formatCapturedCommand(components);
-    debugTranscriberLogsOutput.textContent = logs.stdout || logs.stderr || "No transcriber logs yet.";
 
     if (components.ok) {
         latestComponentsStatus = parseStatus(components.stdout);
         renderTranscriberComponents(latestComponentsStatus);
     }
 
+    debugTranscriberStatusOutput.textContent = "Refreshing transcriber status...";
+    const status = await runCapture("sh ./action.sh transcriber status");
     if (!status.ok) {
         debugTranscriberStatusOutput.textContent = formatCapturedCommand(status);
         debugJobsOutput.textContent = "Transcriber status command failed; jobs could not be read.";
-        return;
+    } else {
+        try {
+            const parsed = JSON.parse(status.stdout || "{}");
+            latestTranscriberStatus = parsed;
+            debugTranscriberStatusOutput.textContent = JSON.stringify(parsed, null, 2);
+            debugJobsOutput.textContent = renderJobsDebug(parsed);
+        } catch (error) {
+            debugTranscriberStatusOutput.textContent = [
+                String(error.message || error),
+                "",
+                formatCapturedCommand(status),
+            ].join("\n");
+            debugJobsOutput.textContent = "Transcriber status JSON could not be parsed.";
+        }
     }
 
-    try {
-        const parsed = JSON.parse(status.stdout || "{}");
-        latestTranscriberStatus = parsed;
-        debugTranscriberStatusOutput.textContent = JSON.stringify(parsed, null, 2);
-        debugJobsOutput.textContent = renderJobsDebug(parsed);
-    } catch (error) {
-        debugTranscriberStatusOutput.textContent = [
-            String(error.message || error),
-            "",
-            formatCapturedCommand(status),
-        ].join("\n");
-        debugJobsOutput.textContent = "Transcriber status JSON could not be parsed.";
-    }
+    debugTranscriberLogsOutput.textContent = "Refreshing transcriber logs...";
+    const logs = await runCapture("sh ./action.sh transcriber logs");
+    debugTranscriberLogsOutput.textContent = logs.stdout || logs.stderr || "No transcriber logs yet.";
 }
 
 async function saveDebugConfig() {
     await run(`sh ./action.sh config set debug.enabled ${debugEnabled.checked ? "1" : "0"}`);
     await refreshStatus();
     updateDebugControls();
-
     if (isDebugEnabled()) {
-        await refreshTranscriberDebug();
+        setDebugOutputs("Debug tracking is enabled. Use Refresh Transcriber Debug when needed.");
         toast("Debug tracking enabled");
     } else {
         setDebugOutputs("Debug tracking is disabled.");
         toast("Debug tracking disabled");
     }
-}
-
-function startDebugPolling() {
-    if (debugPollTimer || !isDebugEnabled() || activeTabName !== "debug") {
-        return;
-    }
-
-    debugPollTimer = window.setInterval(async () => {
-        try {
-            await refreshTranscriberDebug();
-        } catch (error) {
-            rememberDebugError("Debug refresh failed", error);
-        }
-    }, 5000);
-}
-
-function stopDebugPolling() {
-    if (!debugPollTimer) {
-        return;
-    }
-
-    window.clearInterval(debugPollTimer);
-    debugPollTimer = null;
 }
 
 function formatBytes(value) {
@@ -1039,11 +1127,16 @@ function formatEta(seconds) {
 }
 
 function startComponentPolling() {
-    if (componentPollTimer) {
+    if (componentPollTimer || activeTabName !== "transcriber") {
         return;
     }
 
     componentPollTimer = window.setInterval(async () => {
+        if (activeTabName !== "transcriber") {
+            stopComponentPolling();
+            return;
+        }
+
         try {
             await refreshTranscriberComponentsStatus();
         } catch (error) {
@@ -1058,14 +1151,6 @@ function startComponentPolling() {
                 await refreshTranscriberStatus();
             } catch (error) {
                 rememberDebugError("Transcriber status refresh failed after component prep", error);
-            }
-        }
-
-        if (activeTabName === "debug" && isDebugEnabled()) {
-            try {
-                await refreshTranscriberDebug();
-            } catch (error) {
-                rememberDebugError("Transcriber debug refresh failed during component prep", error);
             }
         }
     }, 1500);
@@ -1201,16 +1286,8 @@ transcriberTab.addEventListener("click", async () => {
 });
 debugTab.addEventListener("click", async () => {
     setActiveTab("debug");
-    setBusy(true);
-    try {
-        await refreshStatus();
-        await refreshTranscriberComponentsStatus();
-        await refreshTranscriberDebug();
-    } catch (error) {
-        rememberDebugError("Debug tab refresh failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
+    if (isDebugEnabled() && debugTranscriberStatusOutput?.textContent === "Debug tracking is disabled.") {
+        setDebugOutputs("Debug tracking is enabled. Use Refresh Transcriber Debug when needed.");
     }
 });
 
@@ -1334,10 +1411,37 @@ document.querySelector("#save-transcriber-button").addEventListener("click", asy
     }
 });
 
+transcriberWhisperFile?.addEventListener("change", () => {
+    updateTranscriberWhisperLocalStatus();
+});
+
+importTranscriberWhisperFileButton?.addEventListener("click", async () => {
+    setBusy(true);
+    try {
+        await importLocalWhisperFile();
+    } catch (error) {
+        rememberDebugError("Local whisper package import failed", error);
+        toast(String(error.message || error));
+    } finally {
+        setBusy(false);
+    }
+});
+
+clearTranscriberWhisperFileButton?.addEventListener("click", async () => {
+    setBusy(true);
+    try {
+        await clearLocalWhisperFile();
+    } catch (error) {
+        toast(String(error.message || error));
+    } finally {
+        setBusy(false);
+    }
+});
+
 document.querySelector("#install-transcriber-deps-button").addEventListener("click", async () => {
     const estimatedBytes = Number(
-        latestStatus["transcriber.components.estimated_bytes"] ||
         latestComponentsStatus["transcriber.components.total_estimated_bytes"] ||
+        latestStatus["transcriber.components.estimated_bytes"] ||
         0,
     );
     const choice = await requestChoice({
@@ -1358,9 +1462,6 @@ document.querySelector("#install-transcriber-deps-button").addEventListener("cli
         toast(output || "Component download started");
         await refreshTranscriberComponentsStatus();
         startComponentPolling();
-        if (isDebugEnabled()) {
-            await refreshTranscriberDebug();
-        }
     } catch (error) {
         rememberDebugError("Prepare Components failed", error);
         toast(String(error.message || error));
