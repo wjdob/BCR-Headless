@@ -38,7 +38,7 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
               version="${GITHUB_REF#refs/tags/v}"
               publish=true
-              draft=true
+              draft=false
           else
               version="${{ inputs.version }}"
               publish="${{ inputs.publish }}"
