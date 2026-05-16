@@ -6,7 +6,7 @@ on:
       version:
         description: 'Release/test version tag without leading v'
         required: true
-        default: '1.1.0-test.3'
+        default: '1.1.0-test.4'
         type: string
       publish:
         description: 'Create or update a GitHub release'
@@ -73,7 +73,7 @@ jobs:
           set -euo pipefail
           ./gradlew --no-daemon :app:zipRelease \
               -PprojectUrl="https://github.com/${GITHUB_REPOSITORY}" \
-              -PreleaseMetadataBranch="${GITHUB_REF_NAME}"
+              -PreleaseMetadataBranch="main"
 
       - name: Locate release zip
         id: zip

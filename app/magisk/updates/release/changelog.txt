@@ -1,4 +1,4 @@
-BCR Headless 1.1.0-test.3
+BCR Headless 1.1.0-test.4
 
 - Temporary public test build for side-by-side validation
 - Experimental offline transcription queue with speaker-labeled output
@@ -6,4 +6,4 @@ BCR Headless 1.1.0-test.3
 - Experimental stereo uplink/downlink recording toggle
 - Debug-gated transcriber status, component download, and job diagnostics
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.3/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.4/CHANGELOG.md
