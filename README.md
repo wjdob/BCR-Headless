@@ -4,11 +4,11 @@
 
 > Test build: this branch/package is temporarily labeled as
 > `BCR Headless Test` with module id `bcr.headless.test` and version
-> `1.1.0-test.1` so it can be installed beside the original `1.0.0`
+> `1.1.0-test.2` so it can be installed beside the original `1.0.0`
 > `bcr.headless` release.
 
-[![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless?sort=semver)](https://github.com/wjdob/BCR-Headless/releases/latest)
-[![license badge](https://img.shields.io/github/license/wjdob/BCR-Headless)](./LICENSE)
+[![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
+[![license badge](https://img.shields.io/github/license/wjdob/BCR-Headless-Test)](./LICENSE)
 
 BCR Headless is a headless call recorder module for rooted Android devices. It is an architectural rebuild of the original BCR project that keeps the recorder inside the module directory, exposes configuration through a module WebUI, and avoids installing a visible companion app.
 
@@ -184,7 +184,7 @@ and runs a lightweight executable check before marking the component ready.
 This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
 
 * `1.x` for the standalone headless rebuild line
-* `1.1.0-test.1` for this temporary parallel-install test build
+* `1.1.0-test.2` for this temporary parallel-install test build
 * plain semantic version names such as `1.0.0` for stable releases
 
 ## Building

@@ -82,7 +82,7 @@ val gitVersionTriple = describeVersion(git)
 val projectVersionMajor = 1
 val projectVersionMinor = 1
 val projectVersionPatch = 0
-val projectVersionSuffix = "test.1"
+val projectVersionSuffix = "test.2"
 val gitVersionCode = getVersionCode(
     projectVersionMajor,
     projectVersionMinor,
@@ -97,7 +97,7 @@ val gitVersionName = getVersionName(
 )
 
 val projectUrl = providers.gradleProperty("projectUrl")
-    .orElse("https://github.com/wjdob/BCR-Headless")
+    .orElse("https://github.com/wjdob/BCR-Headless-Test")
     .get()
 val releaseMetadataBranch = providers.gradleProperty("releaseMetadataBranch")
     .orElse("main")

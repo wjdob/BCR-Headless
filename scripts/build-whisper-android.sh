@@ -15,7 +15,7 @@ WHISPER_CPP_REF="${WHISPER_CPP_REF_OVERRIDE:-${WHISPER_CPP_REF}}"
 work_dir="${1:-${repo_dir}/build/transcriber-tools-work}"
 out_dir="${2:-${repo_dir}/build/transcriber-tools}"
 whisper_dir="${work_dir}/whisper.cpp"
-asset_base_url="${ASSET_BASE_URL:-https://github.com/wjdob/BCR-Headless/releases/download/${TOOLS_RELEASE_TAG}}"
+asset_base_url="${ASSET_BASE_URL:-https://github.com/wjdob/BCR-Headless-Test/releases/download/${TOOLS_RELEASE_TAG}}"
 
 if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
     if [[ -n "${ANDROID_HOME:-}" && -d "${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" ]]; then

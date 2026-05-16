@@ -1,8 +1,8 @@
-BCR Headless 1.0.0
+BCR Headless 1.1.0-test.2
 
-- First standalone headless rebuild release
-- Magisk and KernelSU module with KSUWebUI-compatible configuration
-- Recording log, output-folder/file open actions, and debug runtime view
-- Headless architecture designed to avoid the old system-app visibility
+- Temporary public test build for side-by-side validation
+- Experimental offline transcription queue with speaker-labeled output
+- ABI-aware Android whisper.cpp CLI component preparation
+- Experimental stereo uplink/downlink recording toggle
 
-Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.0.0/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.2/CHANGELOG.md
