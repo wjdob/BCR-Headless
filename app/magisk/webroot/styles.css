@@ -326,6 +326,21 @@ button:disabled {
     min-height: 11rem;
 }
 
+.compact-console {
+    min-height: 9rem;
+    max-height: 18rem;
+}
+
+.debug-grid {
+    display: grid;
+    gap: 1rem;
+}
+
+.debug-grid h3 {
+    margin: 0 0 0.45rem;
+    font-size: 0.95rem;
+}
+
 .entry-list {
     display: grid;
     gap: 0.85rem;

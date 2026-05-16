@@ -270,6 +270,24 @@
         <section id="debug-view" class="view stack" hidden>
             <article class="card">
                 <div class="card-head">
+                    <h2>Debug Controls</h2>
+                    <div class="toolbar compact-toolbar">
+                        <span id="debug-status-badge" class="badge">Off</span>
+                    </div>
+                </div>
+                <label class="field toggle-row">
+                    <span>Enable debug tracking</span>
+                    <input id="debug-enabled" type="checkbox">
+                </label>
+                <small class="field-help">When disabled, transcriber debug probes and log tails are not polled. Component prep progress still updates while downloads are active.</small>
+                <div class="actions">
+                    <button id="save-debug-button" type="button">Save Debug</button>
+                    <button id="refresh-transcriber-debug-button" class="ghost" type="button">Refresh Transcriber Debug</button>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="card-head">
                     <h2>Runtime</h2>
                     <div class="toolbar">
                         <span id="runtime-badge" class="badge">Loading</span>
@@ -289,6 +307,30 @@
                     </div>
                 </div>
                 <pre id="diagnostic-output" class="console muted">No diagnostics yet.</pre>
+            </article>
+
+            <article class="card">
+                <div class="card-head">
+                    <h2>Transcriber Debug</h2>
+                </div>
+                <div class="debug-grid">
+                    <section>
+                        <h3>Transcriber Status</h3>
+                        <pre id="debug-transcriber-status-output" class="console muted compact-console">Debug tracking is disabled.</pre>
+                    </section>
+                    <section>
+                        <h3>Components</h3>
+                        <pre id="debug-components-output" class="console muted compact-console">Debug tracking is disabled.</pre>
+                    </section>
+                    <section>
+                        <h3>Jobs</h3>
+                        <pre id="debug-jobs-output" class="console muted compact-console">Debug tracking is disabled.</pre>
+                    </section>
+                    <section>
+                        <h3>Transcriber Logs</h3>
+                        <pre id="debug-transcriber-logs-output" class="console muted compact-console">Debug tracking is disabled.</pre>
+                    </section>
+                </div>
             </article>
         </section>
     </main>

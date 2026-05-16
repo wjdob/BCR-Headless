@@ -21,6 +21,12 @@ const MODULE = resolveModuleContext();
 
 const statusOutput = document.querySelector("#status-output");
 const diagnosticOutput = document.querySelector("#diagnostic-output");
+const debugEnabled = document.querySelector("#debug-enabled");
+const debugStatusBadge = document.querySelector("#debug-status-badge");
+const debugTranscriberStatusOutput = document.querySelector("#debug-transcriber-status-output");
+const debugComponentsOutput = document.querySelector("#debug-components-output");
+const debugJobsOutput = document.querySelector("#debug-jobs-output");
+const debugTranscriberLogsOutput = document.querySelector("#debug-transcriber-logs-output");
 const runtimeBadge = document.querySelector("#runtime-badge");
 const lastResult = document.querySelector("#last-result");
 const lastOutput = document.querySelector("#last-output");
@@ -95,24 +101,59 @@ let latestTranscriberStatus = null;
 let latestComponentsStatus = {};
 let latestRecordingCandidates = [];
 let componentPollTimer = null;
+let debugPollTimer = null;
+let activeTabName = "recorder";
 
 function shellQuote(value) {
     return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 async function run(command) {
-    const result = await exec(command, {
+    const result = await execCommand(command);
+
+    if (result.errno !== 0) {
+        throw new Error(formatExecError(result));
+    }
+
+    return (result.stdout || "").trim();
+}
+
+async function execCommand(command) {
+    return exec(command, {
         cwd: MODULE.moduleDir,
         env: {
             KSU_MODULE: MODULE.moduleId,
         },
     });
+}
 
-    if (result.errno !== 0) {
-        throw new Error(result.stderr || result.stdout || `Command failed with errno ${result.errno}`);
+async function runCapture(command) {
+    try {
+        const result = await execCommand(command);
+        return {
+            command,
+            ok: result.errno === 0,
+            errno: result.errno,
+            stdout: (result.stdout || "").trim(),
+            stderr: (result.stderr || "").trim(),
+        };
+    } catch (error) {
+        return {
+            command,
+            ok: false,
+            errno: -1,
+            stdout: "",
+            stderr: String(error.message || error),
+        };
     }
+}
 
-    return result.stdout.trim();
+function formatExecError(result) {
+    return [
+        `Command failed with errno ${result.errno}`,
+        (result.stderr || "").trim(),
+        (result.stdout || "").trim(),
+    ].filter(Boolean).join("\n");
 }
 
 function parseStatus(text) {
@@ -134,9 +175,14 @@ function setBusy(isBusy) {
     for (const button of buttons) {
         button.disabled = isBusy;
     }
+
+    if (!isBusy) {
+        updateDebugControls();
+    }
 }
 
 function setActiveTab(name) {
+    activeTabName = name;
     const isRecorder = name === "recorder";
     const isRecordings = name === "recordings";
     const isTranscriber = name === "transcriber";
@@ -155,6 +201,7 @@ function setActiveTab(name) {
     transcriberTab.classList.toggle("ghost", !isTranscriber);
     debugTab.classList.toggle("active", isDebug);
     debugTab.classList.toggle("ghost", !isDebug);
+    updateDebugControls();
 }
 
 function updateUiFromStatus(values) {
@@ -164,6 +211,7 @@ function updateUiFromStatus(values) {
     recordingEnabled.checked = enabled;
     recordingLogEnabled.checked = values["recording.log_enabled"] !== "0";
     recordingStereoEnabled.checked = values["recording.stereo"] === "1";
+    debugEnabled.checked = values["debug.enabled"] === "1";
     outputDir.value = values["output.dir"] || "/sdcard/Recordings/BCR";
     minDuration.value = values["recording.min_duration"] || "0";
     transcriberEnabled.checked = values["transcriber.enabled"] === "1";
@@ -190,6 +238,7 @@ function updateUiFromStatus(values) {
         .map((key) => `${key}=${values[key]}`)
         .join("\n");
     statusOutput.textContent = ordered || "No status available.";
+    updateDebugControls();
 }
 
 async function refreshStatus() {
@@ -326,9 +375,15 @@ async function refreshRecordingLog() {
 async function refreshAll() {
     await refreshStatus();
     await refreshRecordingLog();
-    await refreshTranscriberStatus();
     await refreshTranscriberComponentsStatus();
-    await refreshTranscriberRecordings();
+
+    if (activeTabName === "transcriber") {
+        await refreshTranscriberStatus();
+        await refreshTranscriberRecordings();
+    }
+    if (activeTabName === "debug") {
+        await refreshTranscriberDebug();
+    }
 }
 
 async function openLastOutputTarget() {
@@ -402,7 +457,12 @@ async function clearRecordingLog() {
 
 async function refreshTranscriberStatus() {
     const raw = await run("sh ./action.sh transcriber status");
-    latestTranscriberStatus = JSON.parse(raw || "{}");
+    try {
+        latestTranscriberStatus = JSON.parse(raw || "{}");
+    } catch (error) {
+        rememberDebugError("Transcriber status JSON parse failed", `${String(error.message || error)}\n${raw}`);
+        throw error;
+    }
     renderTranscriberStatus(latestTranscriberStatus);
 }
 
@@ -429,6 +489,9 @@ async function refreshTranscriberAll() {
     await refreshTranscriberStatus();
     await refreshTranscriberComponentsStatus();
     await refreshTranscriberRecordings();
+    if (activeTabName === "debug") {
+        await refreshTranscriberDebug();
+    }
 }
 
 function renderTranscriberStatus(status) {
@@ -513,13 +576,14 @@ function renderComponent(values, key, pathEl, progressEl, statusEl) {
     const build = values[`${prefix}build`] || "";
     const whisperRef = values[`${prefix}whisper_ref`] || "";
     const detail = [status, abi, build, whisperRef].filter(Boolean).join(", ");
+    const shownProgress = status === "ready" ? 100 : progress;
 
     pathEl.textContent = `${path} (${detail})`;
-    progressEl.style.width = `${status === "ready" ? 100 : progress}%`;
+    progressEl.style.width = `${shownProgress}%`;
     const source = url !== "No URL configured" ? url : manifestUrl || url;
     statusEl.textContent = error
-        ? `${error} • ${source}`
-        : `${formatBytes(downloaded)} / ${formatBytes(total)} • ${source}`;
+        ? `${status}: ${error} • ${source}`
+        : `${status} • ${formatBytes(downloaded)} / ${formatBytes(total)} • ${shownProgress}% • ${source}`;
 }
 
 function renderTranscriberRecordings(recordings) {
@@ -759,6 +823,200 @@ function selectedRecordingCheckboxes() {
     return Array.from(transcriberRecordingList.querySelectorAll("input[type='checkbox']"));
 }
 
+function isDebugEnabled() {
+    return debugEnabled ? debugEnabled.checked : latestStatus["debug.enabled"] === "1";
+}
+
+function setDebugOutputs(message) {
+    for (const output of [
+        debugTranscriberStatusOutput,
+        debugComponentsOutput,
+        debugJobsOutput,
+        debugTranscriberLogsOutput,
+    ]) {
+        if (output) {
+            output.textContent = message;
+        }
+    }
+}
+
+function formatCapturedCommand(result) {
+    const parts = [
+        `$ ${result.command}`,
+        `exit=${result.errno}`,
+    ];
+    if (result.stdout) {
+        parts.push("stdout:", result.stdout);
+    }
+    if (result.stderr) {
+        parts.push("stderr:", result.stderr);
+    }
+    if (!result.stdout && !result.stderr) {
+        parts.push("(no output)");
+    }
+    return parts.join("\n");
+}
+
+function renderJobsDebug(status) {
+    const queue = status.queue?.jobs || [];
+    const runtime = status.runtime || {};
+    const counts = queue.reduce((acc, job) => {
+        const key = job.status || "unknown";
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+    }, {});
+    const lines = [
+        `runtime.state=${runtime.state || "unknown"}`,
+        `runtime.progress=${runtime.progress ?? 0}`,
+        `runtime.etaSeconds=${runtime.etaSeconds ?? ""}`,
+        `runtime.error=${runtime.error || ""}`,
+        `queue.total=${queue.length}`,
+        `queue.counts=${JSON.stringify(counts)}`,
+        "",
+    ];
+
+    if (!queue.length) {
+        lines.push("No queued transcription jobs.");
+        return lines.join("\n");
+    }
+
+    for (const job of queue) {
+        lines.push([
+            job.id || "unknown-id",
+            job.status || "unknown",
+            `${job.progress ?? 0}%`,
+            job.error ? `error=${job.error}` : "",
+            job.recordingPath || job.inputPath || "",
+            job.transcriptPath || job.outputPath || "",
+        ].filter(Boolean).join(" | "));
+    }
+
+    return lines.join("\n");
+}
+
+function rememberDebugError(title, error) {
+    if (!isDebugEnabled() || !debugTranscriberStatusOutput) {
+        return;
+    }
+
+    const detail = error instanceof Error ? error.message : String(error);
+    const timestamp = timestampFormatter.format(new Date());
+    const previous = debugTranscriberStatusOutput.textContent || "";
+    debugTranscriberStatusOutput.textContent = [
+        `[${timestamp}] ${title}`,
+        detail,
+        previous && previous !== "Debug tracking is disabled." ? `\n${previous}` : "",
+    ].filter(Boolean).join("\n");
+}
+
+function updateDebugControls() {
+    const enabled = isDebugEnabled();
+    if (debugStatusBadge) {
+        debugStatusBadge.textContent = enabled ? "On" : "Off";
+        debugStatusBadge.classList.toggle("recording", enabled);
+    }
+
+    for (const selector of [
+        "#refresh-button",
+        "#restart-button",
+        "#probe-button",
+        "#logs-button",
+        "#refresh-transcriber-debug-button",
+    ]) {
+        const button = document.querySelector(selector);
+        if (button) {
+            button.disabled = !enabled;
+        }
+    }
+
+    if (enabled && activeTabName === "debug") {
+        startDebugPolling();
+    } else {
+        stopDebugPolling();
+        if (!enabled) {
+            setDebugOutputs("Debug tracking is disabled.");
+        }
+    }
+}
+
+async function refreshTranscriberDebug() {
+    if (!isDebugEnabled()) {
+        setDebugOutputs("Debug tracking is disabled.");
+        return;
+    }
+
+    const [components, status, logs] = await Promise.all([
+        runCapture("sh ./action.sh transcriber components-status"),
+        runCapture("sh ./action.sh transcriber status"),
+        runCapture("sh ./action.sh transcriber logs"),
+    ]);
+
+    debugComponentsOutput.textContent = formatCapturedCommand(components);
+    debugTranscriberLogsOutput.textContent = logs.stdout || logs.stderr || "No transcriber logs yet.";
+
+    if (components.ok) {
+        latestComponentsStatus = parseStatus(components.stdout);
+        renderTranscriberComponents(latestComponentsStatus);
+    }
+
+    if (!status.ok) {
+        debugTranscriberStatusOutput.textContent = formatCapturedCommand(status);
+        debugJobsOutput.textContent = "Transcriber status command failed; jobs could not be read.";
+        return;
+    }
+
+    try {
+        const parsed = JSON.parse(status.stdout || "{}");
+        latestTranscriberStatus = parsed;
+        debugTranscriberStatusOutput.textContent = JSON.stringify(parsed, null, 2);
+        debugJobsOutput.textContent = renderJobsDebug(parsed);
+    } catch (error) {
+        debugTranscriberStatusOutput.textContent = [
+            String(error.message || error),
+            "",
+            formatCapturedCommand(status),
+        ].join("\n");
+        debugJobsOutput.textContent = "Transcriber status JSON could not be parsed.";
+    }
+}
+
+async function saveDebugConfig() {
+    await run(`sh ./action.sh config set debug.enabled ${debugEnabled.checked ? "1" : "0"}`);
+    await refreshStatus();
+    updateDebugControls();
+
+    if (isDebugEnabled()) {
+        await refreshTranscriberDebug();
+        toast("Debug tracking enabled");
+    } else {
+        setDebugOutputs("Debug tracking is disabled.");
+        toast("Debug tracking disabled");
+    }
+}
+
+function startDebugPolling() {
+    if (debugPollTimer || !isDebugEnabled() || activeTabName !== "debug") {
+        return;
+    }
+
+    debugPollTimer = window.setInterval(async () => {
+        try {
+            await refreshTranscriberDebug();
+        } catch (error) {
+            rememberDebugError("Debug refresh failed", error);
+        }
+    }, 5000);
+}
+
+function stopDebugPolling() {
+    if (!debugPollTimer) {
+        return;
+    }
+
+    window.clearInterval(debugPollTimer);
+    debugPollTimer = null;
+}
+
 function formatBytes(value) {
     const size = Number(value || 0);
     if (size < 1024) {
@@ -788,10 +1046,27 @@ function startComponentPolling() {
     componentPollTimer = window.setInterval(async () => {
         try {
             await refreshTranscriberComponentsStatus();
-            await refreshTranscriberStatus();
         } catch (error) {
             stopComponentPolling();
+            rememberDebugError("Component status refresh failed", error);
             toast(String(error.message || error));
+            return;
+        }
+
+        if (activeTabName === "transcriber" && latestComponentsStatus["transcriber.components.running"] !== "1") {
+            try {
+                await refreshTranscriberStatus();
+            } catch (error) {
+                rememberDebugError("Transcriber status refresh failed after component prep", error);
+            }
+        }
+
+        if (activeTabName === "debug" && isDebugEnabled()) {
+            try {
+                await refreshTranscriberDebug();
+            } catch (error) {
+                rememberDebugError("Transcriber debug refresh failed during component prep", error);
+            }
         }
     }, 1500);
 }
@@ -904,9 +1179,40 @@ async function runDiagnostic(command, emptyMessage) {
 }
 
 recorderTab.addEventListener("click", () => setActiveTab("recorder"));
-recordingsTab.addEventListener("click", () => setActiveTab("recordings"));
-transcriberTab.addEventListener("click", () => setActiveTab("transcriber"));
-debugTab.addEventListener("click", () => setActiveTab("debug"));
+recordingsTab.addEventListener("click", async () => {
+    setActiveTab("recordings");
+    try {
+        await refreshRecordingLog();
+    } catch (error) {
+        toast(String(error.message || error));
+    }
+});
+transcriberTab.addEventListener("click", async () => {
+    setActiveTab("transcriber");
+    setBusy(true);
+    try {
+        await refreshTranscriberAll();
+    } catch (error) {
+        rememberDebugError("Transcriber tab refresh failed", error);
+        toast(String(error.message || error));
+    } finally {
+        setBusy(false);
+    }
+});
+debugTab.addEventListener("click", async () => {
+    setActiveTab("debug");
+    setBusy(true);
+    try {
+        await refreshStatus();
+        await refreshTranscriberComponentsStatus();
+        await refreshTranscriberDebug();
+    } catch (error) {
+        rememberDebugError("Debug tab refresh failed", error);
+        toast(String(error.message || error));
+    } finally {
+        setBusy(false);
+    }
+});
 
 document.querySelector("#refresh-status-button").addEventListener("click", async () => {
     setBusy(true);
@@ -1052,7 +1358,11 @@ document.querySelector("#install-transcriber-deps-button").addEventListener("cli
         toast(output || "Component download started");
         await refreshTranscriberComponentsStatus();
         startComponentPolling();
+        if (isDebugEnabled()) {
+            await refreshTranscriberDebug();
+        }
     } catch (error) {
+        rememberDebugError("Prepare Components failed", error);
         toast(String(error.message || error));
     } finally {
         setBusy(false);
@@ -1187,11 +1497,44 @@ choiceOverlay?.addEventListener("click", (event) => {
     }
 });
 
+document.querySelector("#save-debug-button").addEventListener("click", async () => {
+    setBusy(true);
+    try {
+        await saveDebugConfig();
+    } catch (error) {
+        rememberDebugError("Saving debug configuration failed", error);
+        toast(String(error.message || error));
+    } finally {
+        setBusy(false);
+    }
+});
+
+debugEnabled?.addEventListener("change", () => {
+    updateDebugControls();
+});
+
+document.querySelector("#refresh-transcriber-debug-button").addEventListener("click", async () => {
+    setBusy(true);
+    try {
+        await refreshTranscriberDebug();
+    } catch (error) {
+        rememberDebugError("Manual transcriber debug refresh failed", error);
+        toast(String(error.message || error));
+    } finally {
+        setBusy(false);
+    }
+});
+
 document.querySelector("#refresh-button").addEventListener("click", async () => {
     setBusy(true);
     try {
+        if (!isDebugEnabled()) {
+            toast("Enable debug tracking first");
+            return;
+        }
         await refreshAll();
     } catch (error) {
+        rememberDebugError("Debug refresh failed", error);
         toast(String(error.message || error));
     } finally {
         setBusy(false);
@@ -1201,10 +1544,15 @@ document.querySelector("#refresh-button").addEventListener("click", async () => 
 document.querySelector("#restart-button").addEventListener("click", async () => {
     setBusy(true);
     try {
+        if (!isDebugEnabled()) {
+            toast("Enable debug tracking first");
+            return;
+        }
         await run("sh ./action.sh restart");
         await refreshAll();
         toast("Daemon restarted");
     } catch (error) {
+        rememberDebugError("Daemon restart failed", error);
         toast(String(error.message || error));
     } finally {
         setBusy(false);
@@ -1214,9 +1562,14 @@ document.querySelector("#restart-button").addEventListener("click", async () => 
 document.querySelector("#probe-button").addEventListener("click", async () => {
     setBusy(true);
     try {
+        if (!isDebugEnabled()) {
+            toast("Enable debug tracking first");
+            return;
+        }
         await runDiagnostic("probe", "Probe returned no output.");
         await refreshStatus();
     } catch (error) {
+        rememberDebugError("Probe failed", error);
         toast(String(error.message || error));
     } finally {
         setBusy(false);
@@ -1226,8 +1579,13 @@ document.querySelector("#probe-button").addEventListener("click", async () => {
 document.querySelector("#logs-button").addEventListener("click", async () => {
     setBusy(true);
     try {
+        if (!isDebugEnabled()) {
+            toast("Enable debug tracking first");
+            return;
+        }
         await runDiagnostic("logs", "No daemon logs yet.");
     } catch (error) {
+        rememberDebugError("Reading daemon logs failed", error);
         toast(String(error.message || error));
     } finally {
         setBusy(false);

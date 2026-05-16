@@ -4,7 +4,7 @@
 
 > Test build: this branch/package is temporarily labeled as
 > `BCR Headless Test` with module id `bcr.headless.test` and version
-> `1.1.0-test.2` so it can be installed beside the original `1.0.0`
+> `1.1.0-test.3` so it can be installed beside the original `1.0.0`
 > `bcr.headless` release.
 
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
@@ -114,10 +114,12 @@ The transcriber screen is intended for offline post-processing:
 
 The debug screen is intended for troubleshooting:
 
+* Enable or disable global debug tracking
 * Refresh runtime state
 * Restart the daemon
 * Run a probe
 * Show daemon logs
+* Inspect transcriber status, component downloads, queued jobs, and transcriber logs
 
 ## Shell Control
 
@@ -144,6 +146,7 @@ The main module config keys are:
 * `recording.min_duration`
 * `recording.log_enabled`
 * `recording.stereo`
+* `debug.enabled`
 * `transcriber.enabled`
 * `transcriber.output_dir`
 * `transcriber.language`
@@ -184,7 +187,7 @@ and runs a lightweight executable check before marking the component ready.
 This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
 
 * `1.x` for the standalone headless rebuild line
-* `1.1.0-test.2` for this temporary parallel-install test build
+* `1.1.0-test.3` for this temporary parallel-install test build
 * plain semantic version names such as `1.0.0` for stable releases
 
 ## Building

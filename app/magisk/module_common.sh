@@ -93,7 +93,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -169,6 +169,9 @@ ensure_defaults() {
     if ! config_get recording.stereo >/dev/null 2>&1; then
         config_set recording.stereo 0
     fi
+    if ! config_get debug.enabled >/dev/null 2>&1; then
+        config_set debug.enabled 0
+    fi
     if ! config_get transcriber.enabled >/dev/null 2>&1; then
         config_set transcriber.enabled 0
     fi
@@ -224,7 +227,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -433,6 +436,14 @@ component_status_set() {
     mv "${tmp}" "${transcriber_components_file}"
 }
 
+component_timestamp() {
+    date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || date 2>/dev/null || printf 'unknown'
+}
+
+one_line() {
+    tr '\r\n' '  ' | sed 's/[[:space:]][[:space:]]*/ /g' | cut -c1-240
+}
+
 detect_android_abi() {
     abi_list=$(getprop ro.product.cpu.abilist 2>/dev/null || true)
     if [ -z "${abi_list}" ]; then
@@ -540,6 +551,7 @@ resolve_whisper_cli_component() {
         rm -f "${manifest_tmp}"
         component_status_set component.whisper_cli.status failed
         component_status_set component.whisper_cli.error "Unable to download transcriber tools manifest"
+        echo "[transcriber-components] unable to download manifest ${resolved_whisper_manifest_url}"
         return 1
     fi
     mv "${manifest_tmp}" "${manifest_path}"
@@ -562,6 +574,7 @@ resolve_whisper_cli_component() {
     if [ -z "${resolved_whisper_url}" ]; then
         component_status_set component.whisper_cli.status failed
         component_status_set component.whisper_cli.error "No whisper-cli package for ABI ${resolved_whisper_abi}"
+        echo "[transcriber-components] no whisper-cli package for ABI ${resolved_whisper_abi}"
         return 1
     fi
 
@@ -583,6 +596,9 @@ component_status_reset() {
 transcriber.components.state=idle
 transcriber.components.running=0
 transcriber.components.error=
+transcriber.components.log=${transcriber_log}
+transcriber.components.started_at=
+transcriber.components.completed_at=
 transcriber.components.total_estimated_bytes=${total_estimated}
 component.whisper_cli.label=whisper.cpp CLI package
 component.whisper_cli.status=missing
@@ -709,7 +725,15 @@ verify_whisper_cli_executable() {
         return 1
     fi
 
-    "${dest}" -h >/dev/null 2>&1 || "${dest}" --help >/dev/null 2>&1
+    help_output=$("${dest}" -h 2>&1)
+    help_result=$?
+    if [ "${help_result}" -eq 0 ] || printf '%s' "${help_output}" | grep -Eiq 'usage|whisper|options'; then
+        return 0
+    fi
+
+    help_output=$("${dest}" --help 2>&1)
+    help_result=$?
+    [ "${help_result}" -eq 0 ] || printf '%s' "${help_output}" | grep -Eiq 'usage|whisper|options'
 }
 
 download_component() {
@@ -720,6 +744,7 @@ download_component() {
     extract_mode="${5}"
     expected_sha256="${6:-}"
     tmp="${dest}.download"
+    download_log="${tmp}.log"
 
     component_status_set "component.${component}.path" "${dest}"
     component_status_set "component.${component}.url" "${url}"
@@ -728,15 +753,19 @@ download_component() {
 
     if [ -f "${dest}" ]; then
         if [ "${component}" = "whisper_cli" ] && ! verify_whisper_cli_executable "${dest}"; then
-            component_status_set "component.${component}.status" failed
-            component_status_set "component.${component}.error" "Existing whisper-cli could not execute on this device"
-            return 1
+            component_status_set "component.${component}.status" downloading
+            component_status_set "component.${component}.error" "Existing whisper-cli could not execute; replacing it"
+            echo "[transcriber-components] replacing non-executable whisper-cli at ${dest}"
+            rm -f "${dest}"
+        else
+            component_status_set "component.${component}.status" ready
+            component_status_set "component.${component}.progress" 100
+            component_status_set "component.${component}.bytes_downloaded" "$(file_size_bytes "${dest}")"
+            component_status_set "component.${component}.error" ""
+            [ "${component}" = "whisper_cli" ] && chmod 755 "${dest}" 2>/dev/null || true
+            echo "[transcriber-components] ${component} already present at ${dest}"
+            return 0
         fi
-        component_status_set "component.${component}.status" ready
-        component_status_set "component.${component}.progress" 100
-        component_status_set "component.${component}.bytes_downloaded" "$(file_size_bytes "${dest}")"
-        [ "${component}" = "whisper_cli" ] && chmod 755 "${dest}" 2>/dev/null || true
-        return 0
     fi
 
     if [ -z "${url}" ]; then
@@ -746,18 +775,20 @@ download_component() {
     fi
 
     mkdir -p "$(dirname "${dest}")"
-    rm -f "${tmp}"
+    rm -f "${tmp}" "${download_log}"
 
     component_status_set "component.${component}.status" downloading
     component_status_set "component.${component}.progress" 0
     component_status_set "component.${component}.bytes_downloaded" 0
     component_status_set "component.${component}.error" ""
 
+    echo "[transcriber-components] downloading ${component} from ${url}"
+
     if command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "${tmp}" "${url}" >/dev/null 2>&1 &
+        curl -L --fail --show-error -o "${tmp}" "${url}" >"${download_log}" 2>&1 &
         download_pid="${!}"
     elif command -v wget >/dev/null 2>&1; then
-        wget -O "${tmp}" "${url}" >/dev/null 2>&1 &
+        wget -O "${tmp}" "${url}" >"${download_log}" 2>&1 &
         download_pid="${!}"
     else
         component_status_set "component.${component}.status" failed
@@ -784,12 +815,17 @@ download_component() {
     component_status_set "component.${component}.bytes_downloaded" "${downloaded}"
 
     if [ "${result}" -ne 0 ] || [ ! -s "${tmp}" ]; then
+        download_error=$(tail -n 5 "${download_log}" 2>/dev/null | one_line)
+        [ -n "${download_error}" ] || download_error="exit ${result}"
+        echo "[transcriber-components] ${component} download failed: ${download_error}"
         rm -f "${tmp}"
         component_status_set "component.${component}.status" failed
         component_status_set "component.${component}.progress" 0
-        component_status_set "component.${component}.error" "Download failed"
+        component_status_set "component.${component}.error" "Download failed: ${download_error}"
         return 1
     fi
+
+    rm -f "${download_log}"
 
     if [ -n "${expected_sha256}" ]; then
         component_status_set "component.${component}.status" verifying
@@ -797,6 +833,7 @@ download_component() {
             rm -f "${tmp}"
             component_status_set "component.${component}.status" failed
             component_status_set "component.${component}.error" "SHA-256 verification failed"
+            echo "[transcriber-components] ${component} SHA-256 verification failed"
             return 1
         fi
     fi
@@ -806,6 +843,7 @@ download_component() {
             rm -f "${tmp}"
             component_status_set "component.${component}.status" failed
             component_status_set "component.${component}.error" "Downloaded package did not contain whisper-cli"
+            echo "[transcriber-components] ${component} package did not contain whisper-cli"
             return 1
         fi
         rm -f "${tmp}"
@@ -818,6 +856,7 @@ download_component() {
         rm -f "${dest}"
         component_status_set "component.${component}.status" failed
         component_status_set "component.${component}.error" "Downloaded whisper-cli could not execute on this device"
+        echo "[transcriber-components] downloaded whisper-cli could not execute on this device"
         return 1
     fi
 
@@ -825,6 +864,7 @@ download_component() {
     component_status_set "component.${component}.progress" 100
     component_status_set "component.${component}.bytes_downloaded" "$(file_size_bytes "${dest}")"
     component_status_set "component.${component}.error" ""
+    echo "[transcriber-components] ${component} ready at ${dest}"
     return 0
 }
 
@@ -833,7 +873,12 @@ install_transcriber_dependencies_foreground() {
     ensure_defaults
     component_status_reset
     component_status_set transcriber.components.state running
+    component_status_set transcriber.components.running 1
     component_status_set transcriber.components.error ""
+    component_status_set transcriber.components.started_at "$(component_timestamp)"
+    component_status_set transcriber.components.completed_at ""
+    component_status_set transcriber.components.log "${transcriber_log}"
+    echo "[transcriber-components] prepare started at $(component_timestamp)"
 
     whisper_path=$(config_get_or_default transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli")
     model_path=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
@@ -865,10 +910,16 @@ install_transcriber_dependencies_foreground() {
     if [ "${failed}" -ne 0 ]; then
         component_status_set transcriber.components.state failed
         component_status_set transcriber.components.error "Failed:${failed_names}"
+        component_status_set transcriber.components.running 0
+        component_status_set transcriber.components.completed_at "$(component_timestamp)"
+        echo "[transcriber-components] prepare failed:${failed_names}"
         return 1
     else
         component_status_set transcriber.components.state ready
         component_status_set transcriber.components.error ""
+        component_status_set transcriber.components.running 0
+        component_status_set transcriber.components.completed_at "$(component_timestamp)"
+        echo "[transcriber-components] prepare completed"
     fi
 }
 
@@ -916,6 +967,7 @@ print_status() {
     echo "recording.log_enabled=$(bool_string config_is_enabled recording.log_enabled 1)"
     echo "recording.stereo=$(bool_string config_is_enabled recording.stereo 0)"
     echo "notifications.enabled=$(bool_string config_is_enabled notifications.enabled 1)"
+    echo "debug.enabled=$(bool_string config_is_enabled debug.enabled 0)"
     echo "transcriber.enabled=$(bool_string config_is_enabled transcriber.enabled 0)"
     echo "transcriber.output_dir=${status_transcriber_output_dir}"
     echo "transcriber.language=$(config_get_or_default transcriber.language en)"

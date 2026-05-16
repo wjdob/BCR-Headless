@@ -1,8 +1,9 @@
-BCR Headless 1.1.0-test.2
+BCR Headless 1.1.0-test.3
 
 - Temporary public test build for side-by-side validation
 - Experimental offline transcription queue with speaker-labeled output
 - ABI-aware Android whisper.cpp CLI component preparation
 - Experimental stereo uplink/downlink recording toggle
+- Debug-gated transcriber status, component download, and job diagnostics
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.2/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.3/CHANGELOG.md
