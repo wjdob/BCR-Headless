@@ -4,7 +4,7 @@
 
 > Test build: this branch/package is temporarily labeled as
 > `BCR Headless Test` with module id `bcr.headless.test` and version
-> `1.1.0-test.8` so it can be installed beside the original `1.0.0`
+> `1.1.0-test.9` so it can be installed beside the original `1.0.0`
 > `bcr.headless` release.
 
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
@@ -46,6 +46,7 @@ This design exists to reduce the user-space surface that security-sensitive apps
 * Best-effort "Open output folder" action from the WebUI
 * Open individual recordings from the recorded-calls view
 * Experimental offline transcription queue with speaker-labeled transcripts
+* In-place updates preserve module config, recording history, queued transcriber state, and downloaded transcriber components
 * Optional experimental stereo uplink/downlink WAV capture for future diarization
 * ABI-aware transcriber component preparation for Android `whisper-cli`
 * Separate debug view for runtime status, probe output, and logs
@@ -107,10 +108,10 @@ The recordings screen is intended for review of captured recordings:
 The transcriber screen is intended for offline post-processing:
 
 * Enable or disable the experimental transcriber
-* Configure transcript directory, source language, and `.txt`/`.docx` output
+* Configure transcript directory, source language, self-speaker name, and `.txt`/`.docx` output
 * Prepare module-local whisper.cpp/model component directories
 * Auto-select an Android `whisper-cli` package from the transcriber tools
-  manifest, or import a local Android `whisper-cli` binary/zip package
+  manifest, or point to a local Android `whisper-cli` binary/zip package path
 * Select one, multiple, or all recordings for the queue
 * Skip, overwrite, or cancel when matching transcripts already exist
 * Pause, resume, stop, remove, and clear queued transcription jobs
@@ -153,6 +154,7 @@ The main module config keys are:
 * `transcriber.enabled`
 * `transcriber.output_dir`
 * `transcriber.language`
+* `transcriber.speaker_self_name`
 * `transcriber.output_format`
 * `transcriber.whisper_path`
 * `transcriber.model_path`
@@ -191,7 +193,7 @@ and runs a lightweight executable check before marking the component ready.
 This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
 
 * `1.x` for the standalone headless rebuild line
-* `1.1.0-test.8` for this temporary parallel-install test build
+* `1.1.0-test.9` for this temporary parallel-install test build
 * plain semantic version names such as `1.0.0` for stable releases
 
 ## Building

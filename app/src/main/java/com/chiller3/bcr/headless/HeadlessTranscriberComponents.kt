@@ -55,6 +55,35 @@ object HeadlessTranscriberComponents {
         installer.run()
     }
 
+    fun runRefreshMetadata(args: Array<String>) {
+        require(args.size >= 10) {
+            "Usage: transcriber refresh-component-metadata <module_dir> <whisper_path> <whisper_manifest_url> <whisper_url> <whisper_local_path> <model_path> <model_url> <tinydiarize_model_path> <tinydiarize_model_url>"
+        }
+
+        val moduleDir = File(args[1])
+        val whisperPath = File(args[2])
+        val whisperManifestUrl = args[3].trim()
+        val whisperUrl = args[4].trim()
+        val whisperLocalPath = args[5].trim().takeIf { it.isNotEmpty() }?.let(::File)
+        val modelPath = File(args[6])
+        val modelUrl = args[7].trim()
+        val tinydiarizeModelPath = File(args[8])
+        val tinydiarizeModelUrl = args[9].trim()
+        val installer = ComponentInstaller(
+            state = ComponentInstallerState(moduleDir),
+            whisperPath = whisperPath,
+            whisperManifestUrl = whisperManifestUrl,
+            whisperUrl = whisperUrl,
+            whisperLocalPath = whisperLocalPath,
+            modelPath = modelPath,
+            modelUrl = modelUrl,
+            tinydiarizeModelPath = tinydiarizeModelPath,
+            tinydiarizeModelUrl = tinydiarizeModelUrl,
+        )
+
+        installer.refreshMetadataOnly()
+    }
+
     private class ComponentInstaller(
         private val state: ComponentInstallerState,
         private val whisperPath: File,
@@ -140,6 +169,55 @@ object HeadlessTranscriberComponents {
             }
         }
 
+        fun refreshMetadataOnly() {
+            state.ensure()
+            status.set("transcriber.components.log", state.logFile.absolutePath)
+            status.set("transcriber.components.running", "0")
+            status.set("transcriber.components.started_at", status.value("transcriber.components.started_at"))
+            status.set("transcriber.components.completed_at", status.value("transcriber.components.completed_at"))
+
+            val failures = mutableListOf<String>()
+            var totalEstimated = 0L
+
+            totalEstimated += try {
+                refreshWhisperMetadata()
+            } catch (e: Exception) {
+                val message = e.localizedMessage ?: e.javaClass.simpleName
+                status.set("component.whisper_cli.status", "failed")
+                status.set("component.whisper_cli.error", message)
+                failures += "whisper.cpp-cli"
+                0L
+            }
+
+            totalEstimated += refreshRemoteMetadata(
+                componentKey = "base_model",
+                sourceUrl = modelUrl,
+                destination = modelPath,
+                sourceKind = "url",
+                sourceDetail = modelUrl,
+            )
+            totalEstimated += refreshRemoteMetadata(
+                componentKey = "tinydiarize_model",
+                sourceUrl = tinydiarizeModelUrl,
+                destination = tinydiarizeModelPath,
+                sourceKind = "url",
+                sourceDetail = tinydiarizeModelUrl,
+            )
+
+            status.set("transcriber.components.total_estimated_bytes", totalEstimated.toString())
+            if (failures.isNotEmpty() || hasFailedComponent()) {
+                status.set("transcriber.components.state", "failed")
+                val failedNames = failures.ifEmpty { collectFailedComponents() }
+                status.set("transcriber.components.error", "Metadata issue: ${failedNames.joinToString(" ")}")
+            } else if (totalEstimated <= 0L) {
+                status.set("transcriber.components.state", "ready")
+                status.set("transcriber.components.error", "")
+            } else {
+                status.set("transcriber.components.state", "idle")
+                status.set("transcriber.components.error", "")
+            }
+        }
+
         private fun markPrepareStarted() {
             status.setAll(
                 mapOf(
@@ -152,6 +230,90 @@ object HeadlessTranscriberComponents {
                 ),
             )
             logger.log("prepare started at ${timestamp()}")
+        }
+
+        private fun refreshWhisperMetadata(): Long {
+            status.set("component.whisper_cli.abi", detectAndroidAbi())
+            status.set("component.whisper_cli.manifest_url", whisperManifestUrl)
+            status.set("component.whisper_cli.local_path", whisperLocalPath?.absolutePath.orEmpty())
+            status.set("component.whisper_cli.path", whisperPath.absolutePath)
+
+            if (whisperPath.isFile && verifyWhisperExecutable(whisperPath, throwOnFailure = false)) {
+                markReady("whisper_cli", whisperPath)
+                return 0L
+            }
+
+            val source = resolveWhisperSource(status.value("component.whisper_cli.abi").ifBlank { detectAndroidAbi() })
+            val bytesTotal = when {
+                source.localFile != null -> source.localFile.length()
+                !source.url.isNullOrBlank() -> try {
+                    probeRemoteSize(source.url) ?: source.bytesTotal ?: 0L
+                } catch (_: Exception) {
+                    source.bytesTotal ?: 0L
+                }
+                else -> source.bytesTotal ?: 0L
+            }
+
+            status.set("component.whisper_cli.source_kind", source.kind)
+            status.set("component.whisper_cli.source_detail", source.detail)
+            status.set("component.whisper_cli.url", source.url ?: "")
+            status.set("component.whisper_cli.sha256", source.sha256 ?: "")
+            status.set("component.whisper_cli.bytes_total", bytesTotal.toString())
+            status.set("component.whisper_cli.bytes_downloaded", "0")
+            status.set("component.whisper_cli.progress", "0")
+            source.build?.let { status.set("component.whisper_cli.build", it) }
+            source.ref?.let { status.set("component.whisper_cli.whisper_ref", it) }
+            source.commit?.let { status.set("component.whisper_cli.whisper_commit", it) }
+
+            if (source.kind == "local") {
+                if (source.localFile?.isFile == true) {
+                    status.set("component.whisper_cli.status", "selected")
+                    status.set("component.whisper_cli.error", "")
+                    return bytesTotal
+                }
+                status.set("component.whisper_cli.status", "failed")
+                status.set("component.whisper_cli.error", "Selected local whisper package is missing")
+                return 0L
+            }
+
+            status.set("component.whisper_cli.status", "missing")
+            status.set("component.whisper_cli.error", "")
+            return bytesTotal
+        }
+
+        private fun refreshRemoteMetadata(
+            componentKey: String,
+            sourceUrl: String,
+            destination: File,
+            sourceKind: String,
+            sourceDetail: String,
+        ): Long {
+            status.set("component.$componentKey.path", destination.absolutePath)
+            status.set("component.$componentKey.source_kind", sourceKind)
+            status.set("component.$componentKey.source_detail", sourceDetail)
+            status.set("component.$componentKey.url", sourceUrl)
+
+            if (destination.isFile) {
+                markReady(componentKey, destination)
+                return 0L
+            }
+
+            val bytesTotal = if (sourceUrl.isBlank()) {
+                0L
+            } else {
+                try {
+                    probeRemoteSize(sourceUrl) ?: status.value("component.$componentKey.bytes_total").toLongOrNull() ?: 0L
+                } catch (_: Exception) {
+                    status.value("component.$componentKey.bytes_total").toLongOrNull() ?: 0L
+                }
+            }
+
+            status.set("component.$componentKey.status", if (sourceUrl.isBlank()) "failed" else "missing")
+            status.set("component.$componentKey.progress", "0")
+            status.set("component.$componentKey.bytes_downloaded", "0")
+            status.set("component.$componentKey.bytes_total", bytesTotal.toString())
+            status.set("component.$componentKey.error", if (sourceUrl.isBlank()) "No download source configured" else "")
+            return bytesTotal
         }
 
         private fun installWhisperCli() {
@@ -408,6 +570,18 @@ object HeadlessTranscriberComponents {
             status.set("component.$componentKey.progress", progress.toString())
         }
 
+        private fun probeRemoteSize(url: String): Long? {
+            val connection = openConnection(url)
+            return connection.useAndDisconnect {
+                val code = responseCode
+                if (code !in 200..299) {
+                    val errorBody = errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    throw IOException(httpErrorMessage(code, responseMessage, errorBody))
+                }
+                contentLengthLong.takeIf { it > 0L }
+            }
+        }
+
         private fun downloadText(url: String): String {
             val connection = openConnection(url)
             return connection.useAndDisconnect {
@@ -645,6 +819,26 @@ object HeadlessTranscriberComponents {
             return true
         }
 
+        private fun hasFailedComponent(): Boolean = listOf(
+            status.value("component.whisper_cli.status"),
+            status.value("component.base_model.status"),
+            status.value("component.tinydiarize_model.status"),
+        ).any { it == "failed" }
+
+        private fun collectFailedComponents(): List<String> {
+            val failures = mutableListOf<String>()
+            if (status.value("component.whisper_cli.status") == "failed") {
+                failures += "whisper.cpp-cli"
+            }
+            if (status.value("component.base_model.status") == "failed") {
+                failures += "base-model"
+            }
+            if (status.value("component.tinydiarize_model.status") == "failed") {
+                failures += "tinydiarize-model"
+            }
+            return failures
+        }
+
         private fun timestamp(): String = Instant.now().toString()
     }
 
@@ -679,6 +873,9 @@ object HeadlessTranscriberComponents {
             }
             save(values)
         }
+
+        @Synchronized
+        fun value(key: String): String = load()[key].orEmpty()
 
         private fun load(): LinkedHashMap<String, String> {
             val values = LinkedHashMap<String, String>()

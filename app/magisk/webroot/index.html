@@ -177,6 +177,12 @@
                 </label>
 
                 <label class="field">
+                    <span>Your speaker name</span>
+                    <input id="transcriber-speaker-self-name" type="text" spellcheck="false" placeholder="Speaker A">
+                    <small>Used for your side of the call transcript. Defaults to Speaker A.</small>
+                </label>
+
+                <label class="field">
                     <span>Transcript format</span>
                     <select id="transcriber-output-format">
                         <option value="txt">Plain text (.txt)</option>
@@ -191,13 +197,12 @@
                 </label>
 
                 <label class="field">
-                    <span>Local whisper.cpp CLI package</span>
-                    <input id="transcriber-whisper-file" type="file">
-                    <small id="transcriber-whisper-local-status">No local package selected. Import a local Android whisper-cli binary or zip to use instead of ABI auto-selection.</small>
+                    <span>Local whisper.cpp CLI package path</span>
+                    <input id="transcriber-whisper-local-path" type="text" spellcheck="false" placeholder="/sdcard/Download/whisper-cli-android-arm64-v8a.zip">
+                    <small id="transcriber-whisper-local-status">Some WebUI hosts do not expose reliable file picking. Enter an absolute path to a local Android whisper-cli binary or zip to use instead of ABI auto-selection, then save.</small>
                 </label>
                 <div class="actions compact-actions">
-                    <button id="import-transcriber-whisper-file-button" class="ghost" type="button">Import Local Package</button>
-                    <button id="clear-transcriber-whisper-file-button" class="ghost danger" type="button">Clear Local Package</button>
+                    <button id="clear-transcriber-whisper-path-button" class="ghost danger" type="button">Clear Local Path</button>
                 </div>
 
                 <label class="field">

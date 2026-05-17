@@ -97,7 +97,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -189,6 +189,9 @@ ensure_defaults() {
     if ! config_get transcriber.output_format >/dev/null 2>&1; then
         config_set transcriber.output_format txt
     fi
+    if ! config_get transcriber.speaker_self_name >/dev/null 2>&1; then
+        config_set transcriber.speaker_self_name "Speaker A"
+    fi
     if ! config_get transcriber.whisper_path >/dev/null 2>&1; then
         config_set transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli"
     fi
@@ -234,7 +237,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -367,7 +370,8 @@ start_daemon() {
     notifications_enabled=$(bool_string config_is_enabled notifications.enabled 1)
     stereo_enabled=$(bool_string config_is_enabled recording.stereo 0)
 
-    : > "${daemon_log}"
+    touch "${daemon_log}"
+    printf '\n[%s] daemon start\n' "$(component_timestamp)" >> "${daemon_log}"
 
     # Run from the module directory instead of installing anything into /system
     # or PackageManager. The daemon's code lives in the helper APK under tools/.
@@ -417,13 +421,15 @@ start_transcriber_worker() {
     model_path=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
     tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
     notifications_enabled=$(bool_string config_is_enabled notifications.enabled 1)
+    speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")
 
     rm -f "${transcriber_stop_file}"
-    : > "${transcriber_log}"
+    touch "${transcriber_log}"
+    printf '\n[%s] transcriber worker start\n' "$(component_timestamp)" >> "${transcriber_log}"
 
     CLASSPATH="${helper_apk}" app_process / \
         com.chiller3.bcr.headless.HeadlessMain \
-        transcriber worker "${mod_dir}" "${whisper_path}" "${model_path}" "${tdrz_model_path}" "${notifications_enabled}" \
+        transcriber worker "${mod_dir}" "${whisper_path}" "${model_path}" "${tdrz_model_path}" "${notifications_enabled}" "${speaker_self_name}" \
         >>"${transcriber_log}" 2>&1 &
     echo "${!}" > "${transcriber_pid_file}"
 
@@ -813,6 +819,42 @@ print_transcriber_components_status() {
 
     cat "${transcriber_components_file}"
     echo "transcriber.components.running=${components_running}"
+}
+
+refresh_transcriber_components_metadata() {
+    ensure_dirs
+    ensure_defaults
+
+    if [ -f "${transcriber_components_pid_file}" ]; then
+        pid=$(cat "${transcriber_components_pid_file}" 2>/dev/null || true)
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            print_transcriber_components_status
+            return 0
+        fi
+    fi
+
+    whisper_path=$(config_get_or_default transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli")
+    whisper_manifest_url=$(config_get_or_default transcriber.whisper_manifest_url "${default_whisper_manifest_url}")
+    whisper_url=$(config_get_or_default transcriber.whisper_url "${default_whisper_url}")
+    whisper_local_path=$(config_get_or_default transcriber.whisper_local_path "")
+    model_path=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
+    model_url=$(config_get_or_default transcriber.model_url "${default_model_url}")
+    tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
+    tdrz_model_url=$(config_get_or_default transcriber.tinydiarize_model_url "${default_tinydiarize_model_url}")
+
+    run_helper_foreground \
+        transcriber refresh-component-metadata \
+        "${mod_dir}" \
+        "${whisper_path}" \
+        "${whisper_manifest_url}" \
+        "${whisper_url}" \
+        "${whisper_local_path}" \
+        "${model_path}" \
+        "${model_url}" \
+        "${tdrz_model_path}" \
+        "${tdrz_model_url}" >/dev/null
+
+    print_transcriber_components_status
 }
 
 file_size_bytes() {
@@ -1207,6 +1249,7 @@ print_status() {
     echo "transcriber.output_dir=${status_transcriber_output_dir}"
     echo "transcriber.language=$(config_get_or_default transcriber.language en)"
     echo "transcriber.output_format=$(config_get_or_default transcriber.output_format txt)"
+    echo "transcriber.speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")"
     echo "transcriber.whisper_path=${status_whisper_path}"
     echo "transcriber.model_path=${status_model_path}"
     echo "transcriber.tinydiarize_model_path=${status_tdrz_model_path}"

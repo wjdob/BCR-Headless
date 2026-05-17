@@ -12,6 +12,9 @@
 * Split stereo WAV transcription into channel-specific mono passes and merge them by timestamp for more reliable `Speaker A` / `Speaker B` labeling
 * Rebuild stereo transcript turns from whisper token timestamps so each line carries the relevant per-speaker time range instead of one line per channel
 * Keep unsupported stereo formats on a whisper.cpp stereo diarization fallback path
+* Preserve config, logs, queued transcriber state, and downloaded transcriber components across in-place module updates
+* Add a configurable self-speaker label and manual local whisper package path in the WebUI
+* Poll transcriber/component progress live in the active Transcriber tab and refresh component size metadata from current remote headers when available
 
 ### Version 1.0.0
 

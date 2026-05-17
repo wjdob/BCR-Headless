@@ -71,6 +71,7 @@ case "${command}" in
         transcript_output_dir=$(config_get_or_default transcriber.output_dir "${recording_output_dir}/transcripts")
         transcriber_language=$(config_get_or_default transcriber.language en)
         transcriber_format=$(config_get_or_default transcriber.output_format txt)
+        transcriber_speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")
         whisper_path=$(config_get_or_default transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli")
         model_path=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
         tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
@@ -112,6 +113,7 @@ case "${command}" in
                     "${transcriber_language}" \
                     "${transcriber_format}" \
                     "${conflict_policy}" \
+                    "${transcriber_speaker_self_name}" \
                     "$@"
                 start_transcriber_worker
                 ;;
@@ -146,6 +148,9 @@ case "${command}" in
                 ;;
             components-status)
                 print_transcriber_components_status
+                ;;
+            components-refresh-metadata)
+                refresh_transcriber_components_metadata
                 ;;
             components-reset)
                 component_status_reset
@@ -208,7 +213,7 @@ case "${command}" in
                 tail -n 200 "${transcriber_log}" 2>/dev/null || true
                 ;;
             *)
-                echo "Usage: $0 transcriber [status|list|enqueue|pause|resume|stop|clear|remove|start-worker|install-deps|components-status|components-reset|local-whisper|remove-deps|open-transcript|logs]" >&2
+                echo "Usage: $0 transcriber [status|list|enqueue|pause|resume|stop|clear|remove|start-worker|install-deps|components-status|components-refresh-metadata|components-reset|local-whisper|remove-deps|open-transcript|logs]" >&2
                 exit 1
                 ;;
         esac

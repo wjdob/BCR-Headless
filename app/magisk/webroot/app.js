@@ -60,12 +60,12 @@ const choiceCheckboxLabel = document.querySelector("#choice-checkbox-label");
 const transcriberEnabled = document.querySelector("#transcriber-enabled");
 const transcriberOutputDir = document.querySelector("#transcriber-output-dir");
 const transcriberLanguage = document.querySelector("#transcriber-language");
+const transcriberSpeakerSelfName = document.querySelector("#transcriber-speaker-self-name");
 const transcriberOutputFormat = document.querySelector("#transcriber-output-format");
 const transcriberWhisperManifestUrl = document.querySelector("#transcriber-whisper-manifest-url");
-const transcriberWhisperFile = document.querySelector("#transcriber-whisper-file");
+const transcriberWhisperLocalPath = document.querySelector("#transcriber-whisper-local-path");
 const transcriberWhisperLocalStatus = document.querySelector("#transcriber-whisper-local-status");
-const importTranscriberWhisperFileButton = document.querySelector("#import-transcriber-whisper-file-button");
-const clearTranscriberWhisperFileButton = document.querySelector("#clear-transcriber-whisper-file-button");
+const clearTranscriberWhisperPathButton = document.querySelector("#clear-transcriber-whisper-path-button");
 const transcriberModelUrl = document.querySelector("#transcriber-model-url");
 const transcriberTdrzUrl = document.querySelector("#transcriber-tdrz-url");
 const transcriberEngineState = document.querySelector("#transcriber-engine-state");
@@ -96,7 +96,6 @@ const timestampFormatter = new Intl.DateTimeFormat(undefined, {
     second: "2-digit",
     timeZoneName: "short",
 });
-const LOCAL_WHISPER_UPLOAD_CHUNK_BYTES = 24 * 1024;
 
 let confirmResolver = null;
 let choiceResolver = null;
@@ -105,6 +104,7 @@ let latestTranscriberStatus = null;
 let latestComponentsStatus = {};
 let latestRecordingCandidates = [];
 let componentPollTimer = null;
+let componentPollInFlight = false;
 let activeTabName = "recorder";
 
 function shellQuote(value) {
@@ -207,8 +207,8 @@ function setActiveTab(name) {
 
     if (!isTranscriber) {
         stopComponentPolling();
-    } else if (latestComponentsStatus["transcriber.components.running"] === "1") {
-        startComponentPolling();
+    } else {
+        updateTranscriberPolling();
     }
 
     updateDebugControls();
@@ -227,8 +227,10 @@ function updateUiFromStatus(values) {
     transcriberEnabled.checked = values["transcriber.enabled"] === "1";
     transcriberOutputDir.value = values["transcriber.output_dir"] || `${outputDir.value || "/sdcard/Recordings/BCR"}/transcripts`;
     transcriberLanguage.value = values["transcriber.language"] || "en";
+    transcriberSpeakerSelfName.value = values["transcriber.speaker_self_name"] || "Speaker A";
     transcriberOutputFormat.value = values["transcriber.output_format"] || "txt";
     transcriberWhisperManifestUrl.value = values["transcriber.whisper_manifest_url"] || "";
+    transcriberWhisperLocalPath.value = values["transcriber.whisper_local_path"] || "";
     transcriberModelUrl.value = values["transcriber.model_url"] || "";
     transcriberTdrzUrl.value = values["transcriber.tinydiarize_model_url"] || "";
     updateTranscriberWhisperLocalStatus(values, latestComponentsStatus);
@@ -386,11 +388,8 @@ async function refreshAll() {
     await refreshStatus();
     await refreshRecordingLog();
     await refreshTranscriberComponentsStatus();
-
-    if (activeTabName === "transcriber") {
-        await refreshTranscriberStatus();
-        await refreshTranscriberRecordings();
-    }
+    await refreshTranscriberStatus();
+    await refreshTranscriberRecordings();
 }
 
 async function openLastOutputTarget() {
@@ -471,18 +470,14 @@ async function refreshTranscriberStatus() {
         throw error;
     }
     renderTranscriberStatus(latestTranscriberStatus);
+    updateTranscriberPolling();
 }
 
 async function refreshTranscriberComponentsStatus() {
     const raw = await run("sh ./action.sh transcriber components-status");
     latestComponentsStatus = parseStatus(raw);
     renderTranscriberComponents(latestComponentsStatus);
-
-    if (latestComponentsStatus["transcriber.components.running"] === "1") {
-        startComponentPolling();
-    } else {
-        stopComponentPolling();
-    }
+    updateTranscriberPolling();
 }
 
 async function refreshTranscriberRecordings() {
@@ -496,6 +491,26 @@ async function refreshTranscriberAll() {
     await refreshTranscriberStatus();
     await refreshTranscriberComponentsStatus();
     await refreshTranscriberRecordings();
+}
+
+async function refreshTranscriberComponentMetadata({ silent = true } = {}) {
+    if (latestComponentsStatus["transcriber.components.running"] === "1") {
+        return;
+    }
+
+    const result = await runCapture("sh ./action.sh transcriber components-refresh-metadata");
+    if (!result.ok) {
+        if (silent) {
+            rememberDebugError("Transcriber component metadata refresh failed", result.stderr || result.stdout || "Unknown error");
+            return;
+        }
+        throw new Error(result.stderr || result.stdout || "Unable to refresh component metadata");
+    }
+
+    latestComponentsStatus = parseStatus(result.stdout || "");
+    renderTranscriberComponents(latestComponentsStatus);
+    updateTranscriberWhisperLocalStatus(latestStatus, latestComponentsStatus);
+    updateTranscriberPolling();
 }
 
 function renderTranscriberStatus(status) {
@@ -581,12 +596,19 @@ function renderComponent(values, key, pathEl, progressEl, statusEl) {
     const detail = [status, abi, build, whisperRef].filter(Boolean).join(", ");
     const shownProgress = status === "ready" ? 100 : progress;
     const source = formatComponentSource(values, prefix);
+    const progressWrap = progressEl?.parentElement;
+    const hideDetails = status === "ready" && !error;
 
     pathEl.textContent = `${path} (${detail})`;
     progressEl.style.width = `${shownProgress}%`;
-    statusEl.textContent = error
-        ? `${status}: ${error} • ${source}`
-        : `${status} • ${formatBytes(downloaded)} / ${formatBytes(total)} • ${shownProgress}% • ${source}`;
+    if (progressWrap) {
+        progressWrap.hidden = hideDetails;
+    }
+    statusEl.textContent = hideDetails
+        ? "Installed and ready"
+        : error
+            ? `${status}: ${error} • ${source}`
+            : `${status} • ${formatBytes(downloaded)} / ${formatBytes(total)} • ${shownProgress}% • ${source}`;
 }
 
 function formatComponentSource(values, prefix) {
@@ -617,21 +639,22 @@ function updateTranscriberWhisperLocalStatus(values = latestStatus, components =
         return;
     }
 
-    const selectedFile = transcriberWhisperFile?.files?.[0];
-    if (selectedFile) {
+    const typedPath = transcriberWhisperLocalPath?.value.trim() || "";
+    const savedPath = values["transcriber.whisper_local_path"] || components["component.whisper_cli.local_path"] || "";
+    if (typedPath && typedPath !== savedPath) {
         transcriberWhisperLocalStatus.textContent =
-            `Selected ${selectedFile.name} • ${formatBytes(selectedFile.size)} • press Import Local Package`;
+            `${typedPath} • manual path typed • save transcriber settings to apply`;
         return;
     }
 
-    const localPath = values["transcriber.whisper_local_path"] || components["component.whisper_cli.local_path"] || "";
+    const localPath = savedPath;
     const componentStatus = components["component.whisper_cli.status"] || "missing";
     const componentError = components["component.whisper_cli.error"] || "";
     const componentSize = Number(components["component.whisper_cli.bytes_total"] || 0);
 
     if (!localPath) {
         transcriberWhisperLocalStatus.textContent =
-            "No local package selected. Import a local Android whisper-cli binary or zip to use instead of ABI auto-selection.";
+            "No manual local package path configured. Enter an absolute binary or zip path if ABI auto-selection is not desired.";
         return;
     }
 
@@ -643,7 +666,7 @@ function updateTranscriberWhisperLocalStatus(values = latestStatus, components =
                 ? "installed source"
                 : "local source selected";
     const sizeText = componentSize > 0 ? ` • ${formatBytes(componentSize)}` : "";
-    transcriberWhisperLocalStatus.textContent = `${basename(localPath)}${sizeText} • ${stateText}`;
+    transcriberWhisperLocalStatus.textContent = `${localPath}${sizeText} • ${stateText}`;
 }
 
 function renderTranscriberRecordings(recordings) {
@@ -771,8 +794,10 @@ async function saveTranscriberConfig() {
     const willEnable = transcriberEnabled.checked;
     const output = transcriberOutputDir.value.trim() || `${outputDir.value.trim() || "/sdcard/Recordings/BCR"}/transcripts`;
     const language = transcriberLanguage.value.trim() || "en";
+    const speakerSelfName = transcriberSpeakerSelfName.value.trim() || "Speaker A";
     const format = transcriberOutputFormat.value || "txt";
     const whisperManifestUrl = transcriberWhisperManifestUrl.value.trim();
+    const whisperLocalPath = transcriberWhisperLocalPath.value.trim();
     const modelUrl = transcriberModelUrl.value.trim();
     const tdrzUrl = transcriberTdrzUrl.value.trim();
 
@@ -815,9 +840,11 @@ async function saveTranscriberConfig() {
             `sh ./action.sh config set transcriber.enabled ${willEnable ? "1" : "0"}`,
             `sh ./action.sh config set transcriber.output_dir ${shellQuote(output)}`,
             `sh ./action.sh config set transcriber.language ${shellQuote(language)}`,
+            `sh ./action.sh config set transcriber.speaker_self_name ${shellQuote(speakerSelfName)}`,
             `sh ./action.sh config set transcriber.output_format ${shellQuote(format)}`,
             `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(whisperManifestUrl)}`,
             `sh ./action.sh config set transcriber.whisper_url ''`,
+            `sh ./action.sh config set transcriber.whisper_local_path ${shellQuote(whisperLocalPath)}`,
             `sh ./action.sh config set transcriber.model_url ${shellQuote(modelUrl)}`,
             `sh ./action.sh config set transcriber.tinydiarize_model_url ${shellQuote(tdrzUrl)}`,
         ].join(" && "),
@@ -832,57 +859,17 @@ async function saveTranscriberConfig() {
     await refreshTranscriberAll();
 }
 
-function bytesToBase64(bytes) {
-    let binary = "";
-    for (let index = 0; index < bytes.length; index += 0x8000) {
-        const slice = bytes.subarray(index, index + 0x8000);
-        binary += String.fromCharCode(...slice);
+async function clearLocalWhisperPath() {
+    if (transcriberWhisperLocalPath) {
+        transcriberWhisperLocalPath.value = "";
     }
-    return btoa(binary);
-}
-
-async function importLocalWhisperFile() {
-    const file = transcriberWhisperFile?.files?.[0];
-    if (!file) {
-        toast("Choose a local whisper package first");
-        return;
-    }
-
-    await run(`sh ./action.sh transcriber local-whisper begin ${shellQuote(file.name)}`);
-    transcriberWhisperLocalStatus.textContent = `Importing ${file.name} • 0%`;
-
-    try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        let uploaded = 0;
-
-        while (uploaded < bytes.length) {
-            const slice = bytes.subarray(uploaded, uploaded + LOCAL_WHISPER_UPLOAD_CHUNK_BYTES);
-            const encoded = bytesToBase64(slice);
-            await run(`sh ./action.sh transcriber local-whisper append-base64 ${shellQuote(encoded)}`);
-            uploaded += slice.length;
-            const progress = bytes.length ? Math.round((uploaded * 100) / bytes.length) : 100;
-            transcriberWhisperLocalStatus.textContent =
-                `Importing ${file.name} • ${progress}% • ${formatBytes(uploaded)} / ${formatBytes(bytes.length)}`;
-        }
-
-        await run("sh ./action.sh transcriber local-whisper commit");
-        transcriberWhisperFile.value = "";
-        toast(`Imported ${file.name}`);
-        await refreshStatus();
-        await refreshTranscriberComponentsStatus();
-    } catch (error) {
-        await runCapture("sh ./action.sh transcriber local-whisper cancel");
-        updateTranscriberWhisperLocalStatus();
-        throw error;
-    }
-}
-
-async function clearLocalWhisperFile() {
-    await run("sh ./action.sh transcriber local-whisper clear");
-    if (transcriberWhisperFile) {
-        transcriberWhisperFile.value = "";
-    }
-    toast("Local whisper package cleared");
+    await run(
+        [
+            `sh ./action.sh config set transcriber.whisper_local_path ''`,
+            `sh ./action.sh transcriber components-reset`,
+        ].join(" && "),
+    );
+    toast("Local whisper package path cleared");
     await refreshStatus();
     await refreshTranscriberComponentsStatus();
 }
@@ -1126,32 +1113,58 @@ function formatEta(seconds) {
     return `${mins}m ${secs}s`;
 }
 
+function transcriberHasActiveJobs(status = latestTranscriberStatus) {
+    const jobs = status?.queue?.jobs || [];
+    return jobs.some((job) => job.status === "queued" || job.status === "running");
+}
+
+function transcriberRuntimeNeedsPolling(status = latestTranscriberStatus) {
+    const runtimeState = status?.runtime?.state || "";
+    return ["running", "resuming", "paused", "stopping"].includes(runtimeState);
+}
+
+function shouldPollTranscriber() {
+    if (activeTabName !== "transcriber") {
+        return false;
+    }
+
+    return latestComponentsStatus["transcriber.components.running"] === "1" ||
+        transcriberHasActiveJobs() ||
+        transcriberRuntimeNeedsPolling();
+}
+
+function updateTranscriberPolling() {
+    if (shouldPollTranscriber()) {
+        startComponentPolling();
+    } else {
+        stopComponentPolling();
+    }
+}
+
 function startComponentPolling() {
     if (componentPollTimer || activeTabName !== "transcriber") {
         return;
     }
 
     componentPollTimer = window.setInterval(async () => {
-        if (activeTabName !== "transcriber") {
+        if (componentPollInFlight) {
+            return;
+        }
+
+        if (!shouldPollTranscriber()) {
             stopComponentPolling();
             return;
         }
 
+        componentPollInFlight = true;
         try {
+            await refreshTranscriberStatus();
             await refreshTranscriberComponentsStatus();
         } catch (error) {
             stopComponentPolling();
             rememberDebugError("Component status refresh failed", error);
-            toast(String(error.message || error));
-            return;
-        }
-
-        if (activeTabName === "transcriber" && latestComponentsStatus["transcriber.components.running"] !== "1") {
-            try {
-                await refreshTranscriberStatus();
-            } catch (error) {
-                rememberDebugError("Transcriber status refresh failed after component prep", error);
-            }
+        } finally {
+            componentPollInFlight = false;
         }
     }, 1500);
 }
@@ -1163,6 +1176,7 @@ function stopComponentPolling() {
 
     window.clearInterval(componentPollTimer);
     componentPollTimer = null;
+    componentPollInFlight = false;
 }
 
 function closeConfirmOverlay(confirmed) {
@@ -1277,6 +1291,7 @@ transcriberTab.addEventListener("click", async () => {
     setBusy(true);
     try {
         await refreshTranscriberAll();
+        await refreshTranscriberComponentMetadata({ silent: true });
     } catch (error) {
         rememberDebugError("Transcriber tab refresh failed", error);
         toast(String(error.message || error));
@@ -1393,6 +1408,7 @@ document.querySelector("#refresh-transcriber-button").addEventListener("click", 
     setBusy(true);
     try {
         await refreshTranscriberAll();
+        await refreshTranscriberComponentMetadata({ silent: true });
     } catch (error) {
         toast(String(error.message || error));
     } finally {
@@ -1411,26 +1427,14 @@ document.querySelector("#save-transcriber-button").addEventListener("click", asy
     }
 });
 
-transcriberWhisperFile?.addEventListener("change", () => {
+transcriberWhisperLocalPath?.addEventListener("input", () => {
     updateTranscriberWhisperLocalStatus();
 });
 
-importTranscriberWhisperFileButton?.addEventListener("click", async () => {
+clearTranscriberWhisperPathButton?.addEventListener("click", async () => {
     setBusy(true);
     try {
-        await importLocalWhisperFile();
-    } catch (error) {
-        rememberDebugError("Local whisper package import failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-clearTranscriberWhisperFileButton?.addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await clearLocalWhisperFile();
+        await clearLocalWhisperPath();
     } catch (error) {
         toast(String(error.message || error));
     } finally {
@@ -1439,6 +1443,13 @@ clearTranscriberWhisperFileButton?.addEventListener("click", async () => {
 });
 
 document.querySelector("#install-transcriber-deps-button").addEventListener("click", async () => {
+    try {
+        await refreshTranscriberComponentMetadata({ silent: false });
+    } catch (error) {
+        toast(String(error.message || error));
+        return;
+    }
+
     const estimatedBytes = Number(
         latestComponentsStatus["transcriber.components.total_estimated_bytes"] ||
         latestStatus["transcriber.components.estimated_bytes"] ||
@@ -1461,7 +1472,7 @@ document.querySelector("#install-transcriber-deps-button").addEventListener("cli
         const output = await run("sh ./action.sh transcriber install-deps");
         toast(output || "Component download started");
         await refreshTranscriberComponentsStatus();
-        startComponentPolling();
+        updateTranscriberPolling();
     } catch (error) {
         rememberDebugError("Prepare Components failed", error);
         toast(String(error.message || error));
@@ -1500,6 +1511,7 @@ document.querySelector("#refresh-recordings-for-transcriber-button").addEventLis
     setBusy(true);
     try {
         await refreshTranscriberRecordings();
+        await refreshTranscriberStatus();
     } catch (error) {
         toast(String(error.message || error));
     } finally {

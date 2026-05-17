@@ -33,7 +33,7 @@ object HeadlessTranscriber {
 
     fun run(args: Array<String>) {
         require(args.isNotEmpty()) {
-            "Usage: transcriber [status|list|enqueue|worker|control|prepare-components|open-transcript] ..."
+            "Usage: transcriber [status|list|enqueue|worker|control|prepare-components|refresh-component-metadata|open-transcript] ..."
         }
 
         when (args[0]) {
@@ -43,6 +43,7 @@ object HeadlessTranscriber {
             "worker" -> runWorker(args)
             "control" -> runControl(args)
             "prepare-components" -> HeadlessTranscriberComponents.runPrepare(args)
+            "refresh-component-metadata" -> HeadlessTranscriberComponents.runRefreshMetadata(args)
             "open-transcript" -> runOpenTranscript(args)
             else -> throw IllegalArgumentException("Unknown transcriber subcommand: ${args[0]}")
         }
@@ -124,8 +125,8 @@ object HeadlessTranscriber {
     }
 
     private fun runEnqueue(args: Array<String>) {
-        require(args.size >= 7) {
-            "Usage: transcriber enqueue <module_dir> <transcript_dir> <language> <format> <conflict_policy> <recording>..."
+        require(args.size >= 8) {
+            "Usage: transcriber enqueue <module_dir> <transcript_dir> <language> <format> <conflict_policy> <speaker_self_name> <recording>..."
         }
 
         val moduleDir = File(args[1])
@@ -133,7 +134,8 @@ object HeadlessTranscriber {
         val language = args[3].ifBlank { "en" }
         val format = TranscriptFormat.from(args[4])
         val conflictPolicy = ConflictPolicy.from(args[5])
-        val recordings = args.drop(6).map(::File)
+        val speakerSelfName = normalizeSpeakerName(args[6])
+        val recordings = args.drop(7).map(::File)
         val state = TranscriberState(moduleDir)
 
         state.ensure()
@@ -188,6 +190,7 @@ object HeadlessTranscriber {
                 status = JobStatus.Queued.serializedName,
                 createdAt = Instant.now().toString(),
                 audioChannels = inspectWaveChannels(recording),
+                speakerSelfName = speakerSelfName,
             )
         }
 
@@ -211,7 +214,7 @@ object HeadlessTranscriber {
 
     private fun runWorker(args: Array<String>) {
         require(args.size >= 6) {
-            "Usage: transcriber worker <module_dir> <whisper_path> <model_path> <tinydiarize_model_path> <notifications_enabled>"
+            "Usage: transcriber worker <module_dir> <whisper_path> <model_path> <tinydiarize_model_path> <notifications_enabled> [speaker_self_name]"
         }
 
         val moduleDir = File(args[1])
@@ -219,6 +222,7 @@ object HeadlessTranscriber {
         val modelPath = File(args[3])
         val tinydiarizeModelPath = File(args[4])
         val notificationsEnabled = parseBoolean(args[5], default = true)
+        val defaultSpeakerSelfName = normalizeSpeakerName(args.getOrNull(6))
         val state = TranscriberState(moduleDir)
         val notifier = TranscriberNotifier(notificationsEnabled)
 
@@ -249,6 +253,7 @@ object HeadlessTranscriber {
                 whisperPath = whisperPath,
                 modelPath = modelPath,
                 tinydiarizeModelPath = tinydiarizeModelPath,
+                defaultSpeakerSelfName = defaultSpeakerSelfName,
             )
         }
     }
@@ -354,11 +359,13 @@ object HeadlessTranscriber {
         whisperPath: File,
         modelPath: File,
         tinydiarizeModelPath: File,
+        defaultSpeakerSelfName: String,
     ) {
         val startedAt = Instant.now()
         val recording = File(job.recordingPath)
         val transcript = File(job.transcriptPath)
         val channels = inspectWaveChannels(recording)
+        val speakerSelfName = normalizeSpeakerName(job.speakerSelfName.ifBlank { defaultSpeakerSelfName })
 
         fun fail(message: String) {
             state.queue.replace(job.id) {
@@ -459,6 +466,7 @@ object HeadlessTranscriber {
                     modelPath = modelPath,
                     language = job.language,
                     workDir = workDir,
+                    speakerSelfName = speakerSelfName,
                 )
                 DiarizationMode.TinyDiarize -> transcribeSinglePass(
                     state = state,
@@ -478,6 +486,7 @@ object HeadlessTranscriber {
                         diarization = diarization,
                         outputBase = outputBase,
                         rawTranscript = rawTranscript,
+                        speakerSelfName = speakerSelfName,
                     )
                 }
             }
@@ -647,6 +656,7 @@ object HeadlessTranscriber {
         modelPath: File,
         language: String,
         workDir: File,
+        speakerSelfName: String,
     ): TranscriptionExecutionResult {
         val split = splitStereoWave(activeFile, workDir)
         if (split == null) {
@@ -670,6 +680,7 @@ object HeadlessTranscriber {
                     diarization = DiarizationMode.Stereo,
                     outputBase = outputBase,
                     rawTranscript = rawTranscript,
+                    speakerSelfName = speakerSelfName,
                 )
             }
         }
@@ -690,7 +701,7 @@ object HeadlessTranscriber {
             maxLenChars = 24,
             splitOnWord = true,
         ) { outputBase, _ ->
-            normalizeChannelTranscript(outputBase, "Speaker A")
+            normalizeChannelTranscript(outputBase, speakerSelfName)
         }
         when (leftResult) {
             TranscriptionExecutionResult.Cancelled -> return leftResult
@@ -832,12 +843,13 @@ object HeadlessTranscriber {
         diarization: DiarizationMode,
         outputBase: File,
         rawTranscript: String,
+        speakerSelfName: String,
     ): NormalizedTranscript = when (diarization) {
-        DiarizationMode.Stereo -> normalizeStereoTranscript(outputBase) ?: normalizeSpeakerTranscript(rawTranscript)
-        DiarizationMode.TinyDiarize -> normalizeTinydiarizeTranscript(outputBase) ?: normalizeSpeakerTranscript(rawTranscript)
+        DiarizationMode.Stereo -> normalizeStereoTranscript(outputBase, speakerSelfName) ?: normalizeSpeakerTranscript(rawTranscript, speakerSelfName)
+        DiarizationMode.TinyDiarize -> normalizeTinydiarizeTranscript(outputBase, speakerSelfName) ?: normalizeSpeakerTranscript(rawTranscript, speakerSelfName)
     }
 
-    private fun normalizeStereoTranscript(outputBase: File): NormalizedTranscript? {
+    private fun normalizeStereoTranscript(outputBase: File, speakerSelfName: String): NormalizedTranscript? {
         val transcription = readWhisperTranscription(outputBase) ?: return null
         val pending = transcription.mapNotNull { segment ->
             val offsets = segment.offsets ?: return@mapNotNull null
@@ -849,7 +861,7 @@ object HeadlessTranscriber {
             PendingTranscriptSpan(
                 startMs = offsets.from.coerceAtLeast(0),
                 endMs = offsets.to.coerceAtLeast(offsets.from),
-                speaker = mapStereoSpeaker(segment.speaker),
+                speaker = mapStereoSpeaker(segment.speaker, speakerSelfName),
                 text = text,
             )
         }
@@ -866,7 +878,7 @@ object HeadlessTranscriber {
 
         return NormalizedTranscript(
             text = formatTranscriptUtterances(utterances),
-            hasSpeakerLabels = utterances.any { it.speaker.startsWith("Speaker ") },
+            hasSpeakerLabels = utterances.isNotEmpty(),
             utterances = utterances,
         )
     }
@@ -892,7 +904,7 @@ object HeadlessTranscriber {
         return resolved
     }
 
-    private fun normalizeTinydiarizeTranscript(outputBase: File): NormalizedTranscript? {
+    private fun normalizeTinydiarizeTranscript(outputBase: File, speakerSelfName: String): NormalizedTranscript? {
         val transcription = readWhisperTranscription(outputBase) ?: return null
         val utterances = mutableListOf<TranscriptUtterance>()
         var speakerIndex = 0
@@ -910,9 +922,9 @@ object HeadlessTranscriber {
             }
 
             val speaker = if (speakerIndex % 2 == 0) {
-                "Speaker A"
+                speakerSelfName
             } else {
-                "Speaker B"
+                DEFAULT_REMOTE_SPEAKER_NAME
             }
             utterances += TranscriptUtterance(
                 startMs = offsets.from.coerceAtLeast(0),
@@ -933,7 +945,7 @@ object HeadlessTranscriber {
         val merged = mergeAdjacentUtterances(utterances)
         return NormalizedTranscript(
             text = formatTranscriptUtterances(merged),
-            hasSpeakerLabels = true,
+            hasSpeakerLabels = merged.isNotEmpty(),
             utterances = merged,
         )
     }
@@ -970,7 +982,7 @@ object HeadlessTranscriber {
 
         return NormalizedTranscript(
             text = formatTranscriptUtterances(merged),
-            hasSpeakerLabels = merged.any { it.speaker.startsWith("Speaker ") },
+            hasSpeakerLabels = merged.isNotEmpty(),
             utterances = merged,
         )
     }
@@ -1183,7 +1195,7 @@ object HeadlessTranscriber {
         return "%02d:%02d:%02d.%03d".format(hours, minutes, seconds, millis)
     }
 
-    private fun mapStereoSpeaker(rawSpeaker: String?): String? {
+    private fun mapStereoSpeaker(rawSpeaker: String?, speakerSelfName: String): String? {
         val normalized = rawSpeaker
             ?.trim()
             ?.lowercase(Locale.ROOT)
@@ -1191,13 +1203,13 @@ object HeadlessTranscriber {
             ?: return null
 
         return when (normalized) {
-            "0", "a", "speakera" -> "Speaker A"
-            "1", "b", "speakerb" -> "Speaker B"
+            "0", "a", "speakera" -> speakerSelfName
+            "1", "b", "speakerb" -> DEFAULT_REMOTE_SPEAKER_NAME
             else -> null
         }
     }
 
-    private fun normalizeSpeakerTranscript(raw: String): NormalizedTranscript {
+    private fun normalizeSpeakerTranscript(raw: String, speakerSelfName: String): NormalizedTranscript {
         val speakerMap = linkedMapOf<String, String>()
         var nextSpeaker = 0
         var sawSpeaker = false
@@ -1211,10 +1223,18 @@ object HeadlessTranscriber {
         fun labelFor(rawId: String): String {
             val key = rawId.lowercase(Locale.ROOT)
             if (key.length == 1 && key[0] in 'a'..'z') {
-                return "Speaker ${key.uppercase(Locale.ROOT)}"
+                return when (key) {
+                    "a" -> speakerSelfName
+                    "b" -> DEFAULT_REMOTE_SPEAKER_NAME
+                    else -> "Speaker ${key.uppercase(Locale.ROOT)}"
+                }
             }
             return speakerMap.getOrPut(key) {
-                val label = "Speaker ${('A'.code + nextSpeaker).toChar()}"
+                val label = when (nextSpeaker) {
+                    0 -> speakerSelfName
+                    1 -> DEFAULT_REMOTE_SPEAKER_NAME
+                    else -> "Speaker ${('A'.code + nextSpeaker).toChar()}"
+                }
                 nextSpeaker += 1
                 label
             }
@@ -1587,8 +1607,16 @@ object HeadlessTranscriber {
         else -> default
     }
 
+    private fun normalizeSpeakerName(value: String?): String =
+        value
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_SELF_SPEAKER_NAME
+
     private val AUDIO_EXTENSIONS = setOf("wav", "flac", "m4a", "mp3", "ogg", "opus", "aac", "amr")
     private val ACTIVE_STATUSES = setOf(JobStatus.Queued.serializedName, JobStatus.Running.serializedName)
+    private const val DEFAULT_SELF_SPEAKER_NAME = "Speaker A"
+    private const val DEFAULT_REMOTE_SPEAKER_NAME = "Speaker B"
 
     private const val CONTENT_TYPES_XML =
         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"""
@@ -1751,6 +1779,7 @@ data class TranscriptionJob(
     val recordingPath: String,
     val transcriptPath: String,
     val language: String,
+    val speakerSelfName: String = "Speaker A",
     val format: String,
     val overwrite: Boolean,
     val status: String,

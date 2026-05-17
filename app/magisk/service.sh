@@ -11,3 +11,4 @@
 ensure_defaults
 clear_stale_pid
 start_daemon
+start_transcriber_worker
