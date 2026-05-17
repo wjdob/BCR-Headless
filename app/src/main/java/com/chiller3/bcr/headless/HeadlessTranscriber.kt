@@ -601,6 +601,58 @@ object HeadlessTranscriber {
         splitOnWord: Boolean = false,
         normalizer: (File, String) -> NormalizedTranscript?,
     ): TranscriptionExecutionResult {
+        return when (
+            val pass = executeWhisperPass(
+                state = state,
+                job = job,
+                startedAt = startedAt,
+                activeFile = activeFile,
+                whisperPath = whisperPath,
+                modelPath = modelPath,
+                recording = recording,
+                language = language,
+                outputBase = outputBase,
+                diarization = diarization,
+                progressBase = progressBase,
+                progressSpan = progressSpan,
+                maxLenChars = maxLenChars,
+                splitOnWord = splitOnWord,
+            )
+        ) {
+            WhisperPassExecutionResult.Cancelled -> TranscriptionExecutionResult.Cancelled
+            is WhisperPassExecutionResult.Failure -> TranscriptionExecutionResult.Failure(pass.message)
+            is WhisperPassExecutionResult.Success -> {
+                val normalized = normalizer(pass.outputBase, pass.rawTranscript)
+                    ?: return TranscriptionExecutionResult.Failure(
+                        "Whisper completed but did not emit timestamped transcription data",
+                    )
+                if (!normalized.hasSpeakerLabels) {
+                    return TranscriptionExecutionResult.Failure(
+                        "Whisper completed but did not emit speaker labels for ${diarization?.serializedName ?: "stereo"}",
+                    )
+                }
+
+                TranscriptionExecutionResult.Success(normalized)
+            }
+        }
+    }
+
+    private fun executeWhisperPass(
+        state: TranscriberState,
+        job: TranscriptionJob,
+        startedAt: Instant,
+        activeFile: File,
+        whisperPath: File,
+        modelPath: File,
+        recording: File,
+        language: String,
+        outputBase: File,
+        diarization: DiarizationMode?,
+        progressBase: Int,
+        progressSpan: Int,
+        maxLenChars: Int? = null,
+        splitOnWord: Boolean = false,
+    ): WhisperPassExecutionResult {
         val command = buildWhisperCommand(
             whisperPath = whisperPath,
             modelPath = modelPath,
@@ -624,10 +676,10 @@ object HeadlessTranscriber {
         )
 
         if (result.cancelled) {
-            return TranscriptionExecutionResult.Cancelled
+            return WhisperPassExecutionResult.Cancelled
         }
         if (result.exitCode != 0) {
-            return TranscriptionExecutionResult.Failure(
+            return WhisperPassExecutionResult.Failure(
                 result.stderr.ifBlank { result.stdout }.ifBlank { "whisper.cpp exited with ${result.exitCode}" },
             )
         }
@@ -635,17 +687,10 @@ object HeadlessTranscriber {
         val rawTranscript = result.stdout.ifBlank {
             File("${outputBase.absolutePath}.txt").takeIf { it.isFile }?.readText().orEmpty()
         }
-        val normalized = normalizer(outputBase, rawTranscript)
-            ?: return TranscriptionExecutionResult.Failure(
-                "Whisper completed but did not emit timestamped transcription data",
-            )
-        if (!normalized.hasSpeakerLabels) {
-            return TranscriptionExecutionResult.Failure(
-                "Whisper completed but did not emit speaker labels for ${diarization?.serializedName ?: "stereo"}",
-            )
-        }
-
-        return TranscriptionExecutionResult.Success(normalized)
+        return WhisperPassExecutionResult.Success(
+            outputBase = outputBase,
+            rawTranscript = rawTranscript,
+        )
     }
 
     private fun transcribeStereoRecording(
@@ -687,7 +732,29 @@ object HeadlessTranscriber {
         val leftSpeechRegions = detectMonoSpeechRegions(split.left)
         val rightSpeechRegions = detectMonoSpeechRegions(split.right)
 
-        val leftResult = transcribeSinglePass(
+        val fullPass = executeWhisperPass(
+            state = state,
+            job = job,
+            startedAt = startedAt,
+            activeFile = activeFile,
+            whisperPath = whisperPath,
+            modelPath = modelPath,
+            recording = activeFile,
+            language = language,
+            outputBase = File(workDir, "whisper-stereo"),
+            diarization = null,
+            progressBase = 0,
+            progressSpan = 34,
+        }
+        when (fullPass) {
+            WhisperPassExecutionResult.Cancelled -> return TranscriptionExecutionResult.Cancelled
+            is WhisperPassExecutionResult.Failure -> {
+                return TranscriptionExecutionResult.Failure("Stereo transcription failed: ${fullPass.message}")
+            }
+            is WhisperPassExecutionResult.Success -> Unit
+        }
+
+        val leftPass = executeWhisperPass(
             state = state,
             job = job,
             startedAt = startedAt,
@@ -698,24 +765,18 @@ object HeadlessTranscriber {
             language = language,
             outputBase = File(workDir, "whisper-left"),
             diarization = null,
-            progressBase = 0,
-            progressSpan = 50,
-        ) { outputBase, _ ->
-            normalizeChannelTranscript(
-                outputBase = outputBase,
-                primarySpeaker = speakerSelfName,
-                speechRegions = leftSpeechRegions,
-            )
+            progressBase = 34,
+            progressSpan = 33,
         }
-        when (leftResult) {
-            TranscriptionExecutionResult.Cancelled -> return leftResult
-            is TranscriptionExecutionResult.Failure -> {
-                return TranscriptionExecutionResult.Failure("Left channel transcription failed: ${leftResult.message}")
+        when (leftPass) {
+            WhisperPassExecutionResult.Cancelled -> return TranscriptionExecutionResult.Cancelled
+            is WhisperPassExecutionResult.Failure -> {
+                return TranscriptionExecutionResult.Failure("Left channel transcription failed: ${leftPass.message}")
             }
-            is TranscriptionExecutionResult.Success -> Unit
+            is WhisperPassExecutionResult.Success -> Unit
         }
 
-        val rightResult = transcribeSinglePass(
+        val rightPass = executeWhisperPass(
             state = state,
             job = job,
             startedAt = startedAt,
@@ -726,43 +787,29 @@ object HeadlessTranscriber {
             language = language,
             outputBase = File(workDir, "whisper-right"),
             diarization = null,
-            progressBase = 50,
-            progressSpan = 50,
-        ) { outputBase, _ ->
-            normalizeChannelTranscript(
-                outputBase = outputBase,
-                primarySpeaker = DEFAULT_REMOTE_SPEAKER_NAME,
-                speechRegions = rightSpeechRegions,
-            )
-        }
-        when (rightResult) {
-            TranscriptionExecutionResult.Cancelled -> return rightResult
-            is TranscriptionExecutionResult.Failure -> {
-                return TranscriptionExecutionResult.Failure("Right channel transcription failed: ${rightResult.message}")
+            progressBase = 67,
+            progressSpan = 33,
+        )
+        when (rightPass) {
+            WhisperPassExecutionResult.Cancelled -> return TranscriptionExecutionResult.Cancelled
+            is WhisperPassExecutionResult.Failure -> {
+                return TranscriptionExecutionResult.Failure("Right channel transcription failed: ${rightPass.message}")
             }
-            is TranscriptionExecutionResult.Success -> Unit
+            is WhisperPassExecutionResult.Success -> Unit
         }
 
-        val utterances = mergeAdjacentUtterances(
-            (
-                leftResult.transcript.utterances +
-                    rightResult.transcript.utterances
-                )
-                .sortedWith(compareBy<TranscriptUtterance> { it.startMs }.thenBy { it.endMs }.thenBy { it.speaker }),
+        val normalized = buildStereoHybridTranscript(
+            fullOutputBase = fullPass.outputBase,
+            leftOutputBase = leftPass.outputBase,
+            rightOutputBase = rightPass.outputBase,
+            leftSpeechRegions = leftSpeechRegions,
+            rightSpeechRegions = rightSpeechRegions,
+            speakerSelfName = speakerSelfName,
+        ) ?: return TranscriptionExecutionResult.Failure(
+            "Whisper completed but did not emit stable stereo diarization data",
         )
-        if (utterances.isEmpty()) {
-            return TranscriptionExecutionResult.Failure(
-                "Whisper completed but did not emit timestamped transcription data for stereo channels",
-            )
-        }
 
-        return TranscriptionExecutionResult.Success(
-            NormalizedTranscript(
-                text = formatTranscriptUtterances(utterances),
-                hasSpeakerLabels = true,
-                utterances = utterances,
-            ),
-        )
+        return TranscriptionExecutionResult.Success(normalized)
     }
 
     private fun runWhisperProcess(
@@ -969,6 +1016,349 @@ object HeadlessTranscriber {
             null
         }
     }
+
+    private fun buildStereoHybridTranscript(
+        fullOutputBase: File,
+        leftOutputBase: File,
+        rightOutputBase: File,
+        leftSpeechRegions: List<SpeechRegion>,
+        rightSpeechRegions: List<SpeechRegion>,
+        speakerSelfName: String,
+    ): NormalizedTranscript? {
+        val timelineTranscription = readWhisperTranscription(fullOutputBase) ?: return null
+        val leftTranscription = readWhisperTranscription(leftOutputBase) ?: return null
+        val rightTranscription = readWhisperTranscription(rightOutputBase) ?: return null
+        val timelineSentences = buildStereoTimelineSentences(timelineTranscription)
+        if (timelineSentences.isEmpty()) {
+            return null
+        }
+
+        val leftWords = buildReferenceWords(leftTranscription)
+        val rightWords = buildReferenceWords(rightTranscription)
+        var leftCursor = 0
+        var rightCursor = 0
+        var previousSpeaker: String? = null
+        val utterances = mutableListOf<TranscriptUtterance>()
+
+        for (sentence in timelineSentences) {
+            val leftMatch = findBestChannelWindow(leftWords, sentence.normalizedWords, leftCursor)
+            val rightMatch = findBestChannelWindow(rightWords, sentence.normalizedWords, rightCursor)
+            val speaker = chooseStereoSentenceSpeaker(
+                sentence = sentence,
+                leftMatch = leftMatch,
+                rightMatch = rightMatch,
+                previousSpeaker = previousSpeaker,
+                leftSpeechRegions = leftSpeechRegions,
+                rightSpeechRegions = rightSpeechRegions,
+                speakerSelfName = speakerSelfName,
+            )
+
+            if (speaker == speakerSelfName && leftMatch.endIndex > leftCursor) {
+                leftCursor = leftMatch.endIndex
+            } else if (speaker == DEFAULT_REMOTE_SPEAKER_NAME && rightMatch.endIndex > rightCursor) {
+                rightCursor = rightMatch.endIndex
+            }
+
+            utterances += TranscriptUtterance(
+                startMs = sentence.startMs,
+                endMs = sentence.endMs.coerceAtLeast(sentence.startMs),
+                speaker = speaker,
+                text = sentence.text,
+            )
+            previousSpeaker = speaker
+        }
+
+        val merged = mergeAdjacentUtterances(utterances.filter { it.text.isNotBlank() })
+        if (merged.isEmpty()) {
+            return null
+        }
+
+        return NormalizedTranscript(
+            text = formatTranscriptUtterances(merged),
+            hasSpeakerLabels = true,
+            utterances = merged,
+        )
+    }
+
+    private fun buildStereoTimelineSentences(
+        transcription: List<WhisperTranscriptionSegment>,
+    ): List<TimelineSentence> {
+        val sentences = mutableListOf<TimelineSentence>()
+        val text = StringBuilder()
+        var startMs: Long? = null
+        var endMs: Long? = null
+
+        fun flushSentence() {
+            val cleaned = cleanTranscriptFragment(text.toString())
+            val words = tokenizeReferenceWords(cleaned)
+            val resolvedStart = startMs
+            val resolvedEnd = endMs
+            if (
+                cleaned.isNotEmpty() &&
+                words.isNotEmpty() &&
+                resolvedStart != null &&
+                resolvedEnd != null
+            ) {
+                sentences += TimelineSentence(
+                    startMs = resolvedStart.coerceAtLeast(0),
+                    endMs = resolvedEnd.coerceAtLeast(resolvedStart),
+                    text = cleaned,
+                    normalizedWords = words,
+                )
+            }
+
+            text.clear()
+            startMs = null
+            endMs = null
+        }
+
+        fun appendFragment(rawText: String, offsets: WhisperSegmentOffsets?) {
+            if (isWhisperControlToken(rawText)) {
+                return
+            }
+
+            val cleaned = cleanTranscriptFragment(rawText)
+            if (cleaned.isEmpty()) {
+                return
+            }
+
+            if (hasLexicalContent(cleaned) && startMs == null && offsets != null) {
+                startMs = offsets.from.coerceAtLeast(0)
+            }
+            if (offsets != null) {
+                endMs = offsets.to.coerceAtLeast(offsets.from).let { candidate ->
+                    if (endMs == null) candidate else maxOf(endMs!!, candidate)
+                }
+            }
+
+            text.append(rawText)
+            val trimmed = rawText.trim()
+            if (trimmed.isNotEmpty() && trimmed.last() in ".?!") {
+                flushSentence()
+            }
+        }
+
+        for (segment in transcription) {
+            if (segment.tokens.isNotEmpty()) {
+                for (token in segment.tokens) {
+                    appendFragment(token.text, token.offsets)
+                }
+            } else {
+                appendFragment(segment.text, segment.offsets)
+            }
+        }
+
+        flushSentence()
+        return sentences
+    }
+
+    private fun buildReferenceWords(
+        transcription: List<WhisperTranscriptionSegment>,
+    ): List<String> = tokenizeReferenceWords(
+        transcription.joinToString(" ") { segment -> cleanTranscriptFragment(segment.text) },
+    )
+
+    private fun tokenizeReferenceWords(text: String): List<String> {
+        val normalized = normalizeReferenceText(text)
+        if (normalized.isEmpty()) {
+            return emptyList()
+        }
+
+        return normalized.split(' ').filter { it.isNotBlank() }
+    }
+
+    private fun normalizeReferenceText(text: String): String =
+        text
+            .lowercase(Locale.ROOT)
+            .replace(Regex("""\bgonna\b"""), "going to")
+            .replace(Regex("""\bwanna\b"""), "want to")
+            .replace("i'm", "im")
+            .replace("you're", "youre")
+            .replace("we're", "were")
+            .replace("let's", "lets")
+            .replace("mm-hmm", "mmhmm")
+            .replace("boo-boo", "boo boo")
+            .replace(Regex("""[^a-z0-9\s]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+    private fun findBestChannelWindow(
+        corpusWords: List<String>,
+        sentenceWords: List<String>,
+        cursor: Int,
+    ): ChannelMatch {
+        if (sentenceWords.isEmpty() || cursor >= corpusWords.size) {
+            return ChannelMatch.EMPTY
+        }
+
+        val targetLength = sentenceWords.size
+        val minSpan = maxOf(1, targetLength - 2)
+        val maxSpan = minOf(16, targetLength + 6)
+        val maxStartExclusive = minOf(corpusWords.size, cursor + STEREO_MATCH_CURSOR_LOOKAHEAD)
+        var best = ChannelMatch.EMPTY
+
+        for (start in cursor until maxStartExclusive) {
+            for (span in minSpan..maxSpan) {
+                val end = start + span
+                if (end > corpusWords.size) {
+                    break
+                }
+
+                val candidateWords = corpusWords.subList(start, end)
+                val score = calculateWindowMatchScore(sentenceWords, candidateWords)
+                if (score > best.score) {
+                    best = ChannelMatch(
+                        score = score,
+                        startIndex = start,
+                        endIndex = end,
+                    )
+                }
+            }
+        }
+
+        return best
+    }
+
+    private fun calculateWindowMatchScore(
+        sentenceWords: List<String>,
+        candidateWords: List<String>,
+    ): Double {
+        if (sentenceWords.isEmpty() || candidateWords.isEmpty()) {
+            return 0.0
+        }
+
+        val sentenceText = sentenceWords.joinToString(" ")
+        val candidateText = candidateWords.joinToString(" ")
+        val similarity = levenshteinSimilarity(sentenceText, candidateText)
+        val sentenceVocabulary = sentenceWords.toSet()
+        val overlap = sentenceVocabulary
+            .intersect(candidateWords.toSet())
+            .size
+            .toDouble() / sentenceVocabulary.size.coerceAtLeast(1)
+
+        return similarity * 0.8 + overlap * 0.2
+    }
+
+    private fun levenshteinSimilarity(left: String, right: String): Double {
+        if (left == right) {
+            return 1.0
+        }
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0.0
+        }
+
+        val maxLength = maxOf(left.length, right.length)
+        if (maxLength == 0) {
+            return 1.0
+        }
+
+        val distance = levenshteinDistance(left, right)
+        return (maxLength - distance).toDouble() / maxLength.toDouble()
+    }
+
+    private fun levenshteinDistance(left: String, right: String): Int {
+        if (left == right) {
+            return 0
+        }
+        if (left.isEmpty()) {
+            return right.length
+        }
+        if (right.isEmpty()) {
+            return left.length
+        }
+
+        val previous = IntArray(right.length + 1) { it }
+        val current = IntArray(right.length + 1)
+
+        for (leftIndex in left.indices) {
+            current[0] = leftIndex + 1
+            for (rightIndex in right.indices) {
+                val substitutionCost = if (left[leftIndex] == right[rightIndex]) 0 else 1
+                current[rightIndex + 1] = minOf(
+                    current[rightIndex] + 1,
+                    previous[rightIndex + 1] + 1,
+                    previous[rightIndex] + substitutionCost,
+                )
+            }
+            current.copyInto(previous)
+        }
+
+        return previous[right.length]
+    }
+
+    private fun chooseStereoSentenceSpeaker(
+        sentence: TimelineSentence,
+        leftMatch: ChannelMatch,
+        rightMatch: ChannelMatch,
+        previousSpeaker: String?,
+        leftSpeechRegions: List<SpeechRegion>,
+        rightSpeechRegions: List<SpeechRegion>,
+        speakerSelfName: String,
+    ): String {
+        val leftScore = leftMatch.score
+        val rightScore = rightMatch.score
+        val bestScore = maxOf(leftScore, rightScore)
+        val scoreDiff = abs(leftScore - rightScore)
+
+        if (bestScore >= STEREO_MATCH_STRONG_THRESHOLD && scoreDiff >= STEREO_MATCH_STRONG_DIFF) {
+            return if (leftScore >= rightScore) speakerSelfName else DEFAULT_REMOTE_SPEAKER_NAME
+        }
+        if (scoreDiff >= STEREO_MATCH_CLEAR_DIFF) {
+            return if (leftScore >= rightScore) speakerSelfName else DEFAULT_REMOTE_SPEAKER_NAME
+        }
+        if (isShortAcknowledgement(sentence.normalizedWords) && previousSpeaker != null) {
+            return oppositeStereoSpeaker(previousSpeaker, speakerSelfName)
+        }
+        if (bestScore >= STEREO_MATCH_LEAN_THRESHOLD) {
+            return if (leftScore >= rightScore) speakerSelfName else DEFAULT_REMOTE_SPEAKER_NAME
+        }
+
+        val leftOverlap = overlapDuration(sentence.startMs, sentence.endMs, leftSpeechRegions)
+        val rightOverlap = overlapDuration(sentence.startMs, sentence.endMs, rightSpeechRegions)
+        if (leftOverlap != rightOverlap) {
+            return if (leftOverlap >= rightOverlap) speakerSelfName else DEFAULT_REMOTE_SPEAKER_NAME
+        }
+
+        if (leftScore > rightScore) {
+            return speakerSelfName
+        }
+        if (rightScore > leftScore) {
+            return DEFAULT_REMOTE_SPEAKER_NAME
+        }
+        if (previousSpeaker != null && isShortAcknowledgement(sentence.normalizedWords)) {
+            return oppositeStereoSpeaker(previousSpeaker, speakerSelfName)
+        }
+
+        return speakerSelfName
+    }
+
+    private fun oppositeStereoSpeaker(currentSpeaker: String, speakerSelfName: String): String =
+        if (currentSpeaker == speakerSelfName) {
+            DEFAULT_REMOTE_SPEAKER_NAME
+        } else {
+            speakerSelfName
+        }
+
+    private fun isShortAcknowledgement(words: List<String>): Boolean =
+        words.size <= 2 && words.any { it in STEREO_ACKNOWLEDGEMENT_WORDS }
+
+    private fun overlapDuration(
+        startMs: Long,
+        endMs: Long,
+        regions: List<SpeechRegion>,
+    ): Long {
+        if (endMs <= startMs) {
+            return 0L
+        }
+
+        return regions.sumOf { region ->
+            val overlapStart = maxOf(startMs, region.startMs)
+            val overlapEnd = minOf(endMs, region.endMs)
+            (overlapEnd - overlapStart).coerceAtLeast(0L)
+        }
+    }
+
+    private fun hasLexicalContent(text: String): Boolean = text.any { it.isLetterOrDigit() }
 
     private fun normalizeChannelTranscript(
         outputBase: File,
@@ -2052,12 +2442,31 @@ object HeadlessTranscriber {
         Regex("""(?i)<\|[^|]+?\|>|\[_[A-Z0-9]+(?:_[A-Z0-9]+)*_?\]|\[SPEAKER[ _]TURN\]""")
     private const val DEFAULT_SELF_SPEAKER_NAME = "Speaker A"
     private const val DEFAULT_REMOTE_SPEAKER_NAME = "Speaker B"
+    private const val STEREO_MATCH_CURSOR_LOOKAHEAD = 10
+    private const val STEREO_MATCH_STRONG_THRESHOLD = 0.90
+    private const val STEREO_MATCH_STRONG_DIFF = 0.05
+    private const val STEREO_MATCH_CLEAR_DIFF = 0.12
+    private const val STEREO_MATCH_LEAN_THRESHOLD = 0.72
     private const val SPEECH_REGION_ASSIGN_TOLERANCE_MS = 400L
     private const val SPEECH_WINDOW_MS = 50
     private const val SPEECH_PAD_START_MS = 160L
     private const val SPEECH_PAD_END_MS = 220L
     private const val SPEECH_MAX_SILENCE_GAP_MS = 360L
     private const val SPEECH_MIN_REGION_MS = 220L
+    private val STEREO_ACKNOWLEDGEMENT_WORDS = setOf(
+        "mmhmm",
+        "mhm",
+        "uhhuh",
+        "yeah",
+        "yep",
+        "okay",
+        "ok",
+        "bye",
+        "hello",
+        "hi",
+        "yes",
+        "no",
+    )
 
     private const val CONTENT_TYPES_XML =
         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"""
@@ -2309,6 +2718,16 @@ private sealed interface TranscriptionExecutionResult {
     data object Cancelled : TranscriptionExecutionResult
 }
 
+private sealed interface WhisperPassExecutionResult {
+    data class Success(
+        val outputBase: File,
+        val rawTranscript: String,
+    ) : WhisperPassExecutionResult
+
+    data class Failure(val message: String) : WhisperPassExecutionResult
+    data object Cancelled : WhisperPassExecutionResult
+}
+
 @Serializable
 private data class WhisperTranscriptionPayload(
     val transcription: List<WhisperTranscriptionSegment> = emptyList(),
@@ -2374,6 +2793,27 @@ private data class TranscriptUtterance(
     val speaker: String,
     val text: String,
 )
+
+private data class TimelineSentence(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+    val normalizedWords: List<String>,
+)
+
+private data class ChannelMatch(
+    val score: Double,
+    val startIndex: Int,
+    val endIndex: Int,
+) {
+    companion object {
+        val EMPTY = ChannelMatch(
+            score = 0.0,
+            startIndex = 0,
+            endIndex = 0,
+        )
+    }
+}
 
 private data class WaveMetadata(
     val audioFormat: Int,

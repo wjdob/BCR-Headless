@@ -1,8 +1,8 @@
-BCR Headless 1.1.0-test.11
+BCR Headless 1.1.0-test.12
 
-- Fixed stereo transcript readability by preserving whisper.cpp's clean per-channel sentence/segment text
-- Mapped clean per-channel sentence chunks onto detected left/right WAV speech regions for speaker labels and timestamps
-- Kept whisper.cpp control/timestamp token filtering as a fallback for JSON token output
+- Reworked stereo transcription to use one full-call whisper.cpp decode for the clean timeline plus per-channel reference decodes for speaker ownership
+- Added a sentence-level stereo aligner that matches each sentence against left/right channel transcripts before falling back to speech-overlap heuristics
+- Improved short acknowledgement turn handling for replies such as "Mm-hmm" and the trailing call goodbye so timestamps stay readable
 - Preserved the side-by-side test package line for parallel validation on-device
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.11/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.12/CHANGELOG.md

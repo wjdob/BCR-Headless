@@ -9,6 +9,8 @@
 
 ### Unreleased
 
+* Rework stereo transcription around a hybrid whisper.cpp pipeline: one full-call decode for the master timeline plus per-channel reference decodes for sentence-level speaker assignment
+* Use left/right transcript-text matching with speech-overlap and short-acknowledgement fallbacks so stereo transcripts stay readable without collapsing whole sides into a single block
 * Split stereo WAV transcription into channel-specific mono passes and merge them by timestamp for more reliable `Speaker A` / `Speaker B` labeling
 * Rebuild stereo transcript turns from whisper token timestamps so each line carries the relevant per-speaker time range instead of one line per channel
 * Keep unsupported stereo formats on a whisper.cpp stereo diarization fallback path
