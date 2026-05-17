@@ -1,8 +1,8 @@
-BCR Headless 1.1.0-test.10
+BCR Headless 1.1.0-test.11
 
-- Fixed stereo transcript diarization by using whisper.cpp word-level timestamp mode for split channels
-- Filtered whisper.cpp control/timestamp tokens such as [_BEG_] and [_TT_*] from generated transcript text
-- Added WAV speech-region grouping so left/right channel transcripts are broken into readable timestamped turns
+- Fixed stereo transcript readability by preserving whisper.cpp's clean per-channel sentence/segment text
+- Mapped clean per-channel sentence chunks onto detected left/right WAV speech regions for speaker labels and timestamps
+- Kept whisper.cpp control/timestamp token filtering as a fallback for JSON token output
 - Preserved the side-by-side test package line for parallel validation on-device
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.10/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.11/CHANGELOG.md

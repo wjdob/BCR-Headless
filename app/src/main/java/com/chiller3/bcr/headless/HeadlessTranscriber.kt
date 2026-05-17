@@ -482,8 +482,6 @@ object HeadlessTranscriber {
                     diarization = diarization,
                     progressBase = 0,
                     progressSpan = 100,
-                    maxLenChars = 1,
-                    splitOnWord = true,
                 ) { outputBase, rawTranscript ->
                     buildNormalizedTranscript(
                         diarization = diarization,
@@ -676,8 +674,6 @@ object HeadlessTranscriber {
                 diarization = DiarizationMode.Stereo,
                 progressBase = 0,
                 progressSpan = 100,
-                maxLenChars = 1,
-                splitOnWord = true,
             ) { outputBase, rawTranscript ->
                 buildNormalizedTranscript(
                     diarization = DiarizationMode.Stereo,
@@ -704,8 +700,6 @@ object HeadlessTranscriber {
             diarization = null,
             progressBase = 0,
             progressSpan = 50,
-            maxLenChars = 1,
-            splitOnWord = true,
         ) { outputBase, _ ->
             normalizeChannelTranscript(
                 outputBase = outputBase,
@@ -734,8 +728,6 @@ object HeadlessTranscriber {
             diarization = null,
             progressBase = 50,
             progressSpan = 50,
-            maxLenChars = 1,
-            splitOnWord = true,
         ) { outputBase, _ ->
             normalizeChannelTranscript(
                 outputBase = outputBase,
@@ -985,6 +977,19 @@ object HeadlessTranscriber {
         speechRegions: List<SpeechRegion>? = null,
     ): NormalizedTranscript? {
         val transcription = readWhisperTranscription(outputBase) ?: return null
+        val segmentUtterances = buildChannelSegmentUtterances(
+            transcription = transcription,
+            speaker = primarySpeaker,
+            speechRegions = speechRegions,
+        )
+        if (segmentUtterances.isNotEmpty()) {
+            return NormalizedTranscript(
+                text = formatTranscriptUtterances(segmentUtterances),
+                hasSpeakerLabels = true,
+                utterances = segmentUtterances,
+            )
+        }
+
         val spans = buildChannelTranscriptSpans(transcription, primarySpeaker, alternateSpeaker)
         if (spans.isEmpty()) {
             return null
@@ -1001,6 +1006,235 @@ object HeadlessTranscriber {
             utterances = merged,
         )
     }
+
+    private fun buildChannelSegmentUtterances(
+        transcription: List<WhisperTranscriptionSegment>,
+        speaker: String,
+        speechRegions: List<SpeechRegion>?,
+    ): List<TranscriptUtterance> {
+        val chunks = transcription.flatMap { segment ->
+            val text = cleanTranscriptFragment(segment.text)
+            if (text.isEmpty()) {
+                return@flatMap emptyList()
+            }
+
+            val offsets = segment.offsets
+            val pieces = splitTranscriptIntoChunks(text)
+            if (pieces.isEmpty()) {
+                emptyList()
+            } else if (offsets == null || pieces.size == 1) {
+                pieces.map {
+                    ChannelTextChunk(
+                        startMs = offsets?.from?.coerceAtLeast(0),
+                        endMs = offsets?.to?.coerceAtLeast(offsets.from),
+                        text = it,
+                    )
+                }
+            } else {
+                distributeChunksAcrossRange(
+                    chunks = pieces,
+                    startMs = offsets.from.coerceAtLeast(0),
+                    endMs = offsets.to.coerceAtLeast(offsets.from),
+                )
+            }
+        }
+
+        if (chunks.isEmpty()) {
+            return emptyList()
+        }
+
+        val regions = speechRegions.orEmpty()
+            .filter { it.endMs > it.startMs }
+            .sortedBy { it.startMs }
+        val utterances = if (regions.isNotEmpty()) {
+            assignChunksToSpeechRegions(chunks, regions, speaker)
+        } else {
+            chunks.mapIndexed { index, chunk ->
+                val start = chunk.startMs ?: (index * 1000L)
+                val end = chunk.endMs?.coerceAtLeast(start + 1L) ?: (start + estimateChunkDurationMs(chunk.text))
+                TranscriptUtterance(
+                    startMs = start,
+                    endMs = end,
+                    speaker = speaker,
+                    text = chunk.text,
+                )
+            }
+        }
+
+        return mergeAdjacentUtterances(
+            utterances
+                .filter { it.text.isNotBlank() }
+                .sortedWith(compareBy<TranscriptUtterance> { it.startMs }.thenBy { it.endMs }),
+        )
+    }
+
+    private fun distributeChunksAcrossRange(
+        chunks: List<String>,
+        startMs: Long,
+        endMs: Long,
+    ): List<ChannelTextChunk> {
+        val duration = (endMs - startMs).coerceAtLeast(chunks.size.toLong())
+        val weights = chunks.map { estimateChunkWeight(it) }
+        val totalWeight = weights.sum().takeIf { it > 0 } ?: chunks.size.toLong()
+        var cursor = startMs
+
+        return chunks.mapIndexed { index, text ->
+            val isLast = index == chunks.lastIndex
+            val chunkDuration = if (isLast) {
+                endMs - cursor
+            } else {
+                (duration * weights[index] / totalWeight).coerceAtLeast(1L)
+            }
+            val chunkEnd = if (isLast) {
+                endMs
+            } else {
+                (cursor + chunkDuration).coerceAtMost(endMs)
+            }
+            ChannelTextChunk(
+                startMs = cursor,
+                endMs = chunkEnd.coerceAtLeast(cursor + 1L),
+                text = text,
+            ).also {
+                cursor = chunkEnd
+            }
+        }
+    }
+
+    private fun assignChunksToSpeechRegions(
+        chunks: List<ChannelTextChunk>,
+        regions: List<SpeechRegion>,
+        speaker: String,
+    ): List<TranscriptUtterance> {
+        val utterances = mutableListOf<TranscriptUtterance>()
+        var regionIndex = 0
+
+        for ((chunkIndex, chunk) in chunks.withIndex()) {
+            val region = chooseSpeechRegionForChunk(chunk, regions, regionIndex)
+            if (region != null) {
+                regionIndex = (regions.indexOf(region) + 1).coerceAtMost(regions.size)
+            }
+
+            val fallbackStart = chunk.startMs ?: utterances.lastOrNull()?.endMs ?: (chunkIndex * 1000L)
+            val start = region?.startMs ?: fallbackStart
+            val end = region?.endMs
+                ?: chunk.endMs?.coerceAtLeast(start + 1L)
+                ?: (start + estimateChunkDurationMs(chunk.text))
+
+            utterances += TranscriptUtterance(
+                startMs = start,
+                endMs = end.coerceAtLeast(start + 1L),
+                speaker = speaker,
+                text = chunk.text,
+            )
+        }
+
+        return utterances
+    }
+
+    private fun chooseSpeechRegionForChunk(
+        chunk: ChannelTextChunk,
+        regions: List<SpeechRegion>,
+        startIndex: Int,
+    ): SpeechRegion? {
+        if (startIndex >= regions.size) {
+            return null
+        }
+
+        val start = chunk.startMs
+        val end = chunk.endMs
+        if (start == null || end == null) {
+            return regions[startIndex]
+        }
+
+        val overlapping = regions
+            .drop(startIndex)
+            .firstOrNull { region ->
+                rangesOverlap(
+                    start - SPEECH_REGION_ASSIGN_TOLERANCE_MS,
+                    end + SPEECH_REGION_ASSIGN_TOLERANCE_MS,
+                    region.startMs,
+                    region.endMs,
+                )
+            }
+        if (overlapping != null) {
+            return overlapping
+        }
+
+        return regions[startIndex]
+    }
+
+    private fun splitTranscriptIntoChunks(text: String): List<String> {
+        val cleaned = cleanTranscriptFragment(text)
+        if (cleaned.isEmpty()) {
+            return emptyList()
+        }
+
+        val chunks = mutableListOf<String>()
+        val current = StringBuilder()
+        for (index in cleaned.indices) {
+            val char = cleaned[index]
+            current.append(char)
+
+            val atEnd = index == cleaned.lastIndex
+            val next = cleaned.getOrNull(index + 1)
+            if ((char == '.' || char == '?' || char == '!') && (atEnd || next?.isWhitespace() == true)) {
+                chunks += current.toString().trim()
+                current.clear()
+            }
+        }
+
+        val tail = current.toString().trim()
+        if (tail.isNotEmpty()) {
+            chunks += tail
+        }
+
+        return chunks.ifEmpty { listOf(cleaned) }
+            .flatMap { splitLongTranscriptChunk(it) }
+            .filter { it.isNotBlank() }
+    }
+
+    private fun splitLongTranscriptChunk(text: String): List<String> {
+        if (text.length <= 140) {
+            return listOf(text)
+        }
+
+        val parts = text.split(Regex("""(?<=,)\s+"""))
+        if (parts.size <= 1) {
+            return listOf(text)
+        }
+
+        val chunks = mutableListOf<String>()
+        val current = StringBuilder()
+        for (part in parts) {
+            if (current.isNotEmpty() && current.length + part.length + 1 > 140) {
+                chunks += current.toString().trim()
+                current.clear()
+            }
+            if (current.isNotEmpty()) {
+                current.append(' ')
+            }
+            current.append(part)
+        }
+
+        val tail = current.toString().trim()
+        if (tail.isNotEmpty()) {
+            chunks += tail
+        }
+        return chunks
+    }
+
+    private fun estimateChunkWeight(text: String): Long =
+        text.split(Regex("""\s+""")).count { it.isNotBlank() }.coerceAtLeast(1).toLong()
+
+    private fun estimateChunkDurationMs(text: String): Long =
+        (estimateChunkWeight(text) * 420L).coerceIn(600L, 8_000L)
+
+    private fun rangesOverlap(
+        firstStart: Long,
+        firstEnd: Long,
+        secondStart: Long,
+        secondEnd: Long,
+    ): Boolean = firstStart < secondEnd && secondStart < firstEnd
 
     private fun buildChannelTranscriptSpans(
         transcription: List<WhisperTranscriptionSegment>,
@@ -2119,6 +2353,12 @@ private data class SpeechFrame(
     val startMs: Long,
     val endMs: Long,
     val energy: Double,
+)
+
+private data class ChannelTextChunk(
+    val startMs: Long?,
+    val endMs: Long?,
+    val text: String,
 )
 
 private data class PendingTranscriptSpan(

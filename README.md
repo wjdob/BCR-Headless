@@ -4,7 +4,7 @@
 
 > Test build: this branch/package is temporarily labeled as
 > `BCR Headless Test` with module id `bcr.headless.test` and version
-> `1.1.0-test.10` so it can be installed beside the original `1.0.0`
+> `1.1.0-test.11` so it can be installed beside the original `1.0.0`
 > `bcr.headless` release.
 
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
@@ -62,10 +62,9 @@ This rebuild is intentionally narrower than the original BCR app:
 * No cloud transcription backend is included
 * Speaker labels are best-effort diarization labels such as `Speaker A` and
   `Speaker B`; mono recordings require a TinyDiarize-capable model, while
-  stereo WAV recordings are split into left/right mono transcripts, decoded
-  with word-level timestamps, grouped by per-channel speech activity, and
-  merged by time. Unsupported stereo formats fall back to whisper.cpp
-  diarization.
+  stereo WAV recordings are split into left/right mono transcripts, split into
+  clean sentence chunks, grouped by per-channel speech activity, and merged by
+  time. Unsupported stereo formats fall back to whisper.cpp diarization.
 * Multiple people speaking on the same side of a stereo call are still grouped
   together per channel in this test build
 * The output path is a plain filesystem path, not a SAF tree. Don't ask for enhancement.
@@ -195,7 +194,7 @@ and runs a lightweight executable check before marking the component ready.
 This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
 
 * `1.x` for the standalone headless rebuild line
-* `1.1.0-test.10` for this temporary parallel-install test build
+* `1.1.0-test.11` for this temporary parallel-install test build
 * plain semantic version names such as `1.0.0` for stable releases
 
 ## Building
