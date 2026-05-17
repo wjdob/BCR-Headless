@@ -1,7 +1,7 @@
-BCR Headless 1.1.0-test.7
+BCR Headless 1.1.0-test.8
 
-- Fixed stereo call transcript diarization by splitting true stereo WAV recordings into left/right mono passes and merging them by timestamp
-- Kept unsupported stereo formats on a whisper.cpp `-di` fallback path with shorter segment targets
+- Fixed stereo call transcript turn formatting by rebuilding per-channel speaker turns from whisper token timestamps
+- Kept true stereo WAV channel splitting and merge-by-time diarization, while preserving the whisper.cpp `-di` fallback path for unsupported stereo formats
 - Preserved the side-by-side test package line for parallel validation on-device
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.7/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.8/CHANGELOG.md

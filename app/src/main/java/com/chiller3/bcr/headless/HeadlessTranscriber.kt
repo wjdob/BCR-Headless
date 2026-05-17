@@ -539,6 +539,8 @@ object HeadlessTranscriber {
         language: String,
         outputBase: File,
         diarization: DiarizationMode?,
+        maxLenChars: Int? = null,
+        splitOnWord: Boolean = false,
     ): List<String> {
         val command = mutableListOf(
             whisperPath.absolutePath,
@@ -556,8 +558,15 @@ object HeadlessTranscriber {
             outputBase.absolutePath,
         )
 
+        if (maxLenChars != null && maxLenChars > 0) {
+            command += listOf("-ml", maxLenChars.toString())
+        }
+        if (splitOnWord) {
+            command += "-sow"
+        }
+
         when (diarization) {
-            DiarizationMode.Stereo -> command += listOf("-di", "-ml", "24", "-sow")
+            DiarizationMode.Stereo -> command += "-di"
             DiarizationMode.TinyDiarize -> command += "-tdrz"
             null -> Unit
         }
@@ -578,6 +587,8 @@ object HeadlessTranscriber {
         diarization: DiarizationMode?,
         progressBase: Int,
         progressSpan: Int,
+        maxLenChars: Int? = null,
+        splitOnWord: Boolean = false,
         normalizer: (File, String) -> NormalizedTranscript?,
     ): TranscriptionExecutionResult {
         val command = buildWhisperCommand(
@@ -587,6 +598,8 @@ object HeadlessTranscriber {
             language = language,
             outputBase = outputBase,
             diarization = diarization,
+            maxLenChars = maxLenChars,
+            splitOnWord = splitOnWord,
         )
 
         val result = runWhisperProcess(
@@ -650,6 +663,8 @@ object HeadlessTranscriber {
                 diarization = DiarizationMode.Stereo,
                 progressBase = 0,
                 progressSpan = 100,
+                maxLenChars = 24,
+                splitOnWord = true,
             ) { outputBase, rawTranscript ->
                 buildNormalizedTranscript(
                     diarization = DiarizationMode.Stereo,
@@ -672,6 +687,8 @@ object HeadlessTranscriber {
             diarization = null,
             progressBase = 0,
             progressSpan = 50,
+            maxLenChars = 24,
+            splitOnWord = true,
         ) { outputBase, _ ->
             normalizeChannelTranscript(outputBase, "Speaker A")
         }
@@ -696,6 +713,8 @@ object HeadlessTranscriber {
             diarization = null,
             progressBase = 50,
             progressSpan = 50,
+            maxLenChars = 24,
+            splitOnWord = true,
         ) { outputBase, _ ->
             normalizeChannelTranscript(outputBase, "Speaker B")
         }
@@ -939,48 +958,74 @@ object HeadlessTranscriber {
         alternateSpeaker: String? = null,
     ): NormalizedTranscript? {
         val transcription = readWhisperTranscription(outputBase) ?: return null
-        val utterances = mutableListOf<TranscriptUtterance>()
+        val spans = buildChannelTranscriptSpans(transcription, primarySpeaker, alternateSpeaker)
+        if (spans.isEmpty()) {
+            return null
+        }
+
+        val merged = regroupStereoSpans(spans)
+        if (merged.isEmpty()) {
+            return null
+        }
+
+        return NormalizedTranscript(
+            text = formatTranscriptUtterances(merged),
+            hasSpeakerLabels = merged.any { it.speaker.startsWith("Speaker ") },
+            utterances = merged,
+        )
+    }
+
+    private fun buildChannelTranscriptSpans(
+        transcription: List<WhisperTranscriptionSegment>,
+        primarySpeaker: String,
+        alternateSpeaker: String? = null,
+    ): List<TranscriptSpan> {
+        val spans = mutableListOf<TranscriptSpan>()
         var speakerIndex = 0
 
         for (segment in transcription) {
-            val offsets = segment.offsets ?: continue
-            val text = cleanTranscriptFragment(segment.text)
-                .replace(" [SPEAKER_TURN]", "")
-                .trim()
-            if (text.isEmpty()) {
-                if (alternateSpeaker != null && segment.speakerTurnNext) {
-                    speakerIndex = (speakerIndex + 1) % 2
-                }
-                continue
-            }
-
             val speaker = if (alternateSpeaker != null && speakerIndex % 2 == 1) {
                 alternateSpeaker
             } else {
                 primarySpeaker
             }
-            utterances += TranscriptUtterance(
-                startMs = offsets.from.coerceAtLeast(0),
-                endMs = offsets.to.coerceAtLeast(offsets.from),
-                speaker = speaker,
-                text = text,
-            )
+
+            val tokenSpans = segment.tokens.mapNotNull { token ->
+                val offsets = token.offsets ?: return@mapNotNull null
+                val text = cleanTokenFragment(token.text)
+                if (text.isEmpty()) {
+                    return@mapNotNull null
+                }
+
+                TranscriptSpan(
+                    startMs = offsets.from.coerceAtLeast(0),
+                    endMs = offsets.to.coerceAtLeast(offsets.from),
+                    speaker = speaker,
+                    text = text,
+                )
+            }
+
+            if (tokenSpans.isNotEmpty()) {
+                spans += tokenSpans
+            } else {
+                val offsets = segment.offsets
+                val text = cleanTokenFragment(segment.text)
+                if (offsets != null && text.isNotEmpty()) {
+                    spans += TranscriptSpan(
+                        startMs = offsets.from.coerceAtLeast(0),
+                        endMs = offsets.to.coerceAtLeast(offsets.from),
+                        speaker = speaker,
+                        text = text,
+                    )
+                }
+            }
 
             if (alternateSpeaker != null && segment.speakerTurnNext) {
                 speakerIndex = (speakerIndex + 1) % 2
             }
         }
 
-        if (utterances.isEmpty()) {
-            return null
-        }
-
-        val merged = mergeAdjacentUtterances(utterances)
-        return NormalizedTranscript(
-            text = formatTranscriptUtterances(merged),
-            hasSpeakerLabels = merged.any { it.speaker.startsWith("Speaker ") },
-            utterances = merged,
-        )
+        return spans
     }
 
     private fun regroupStereoSpans(spans: List<TranscriptSpan>): List<TranscriptUtterance> {
@@ -1108,13 +1153,16 @@ object HeadlessTranscriber {
             .replace(Regex("""\s+"""), " ")
             .trim()
 
+    private fun cleanTokenFragment(text: String): String =
+        cleanTranscriptFragment(text.replace("[SPEAKER_TURN]", " "))
+
     private fun needsSpaceBefore(fragment: String): Boolean {
         if (fragment.isEmpty()) {
             return false
         }
 
         val first = fragment.first()
-        return first !in ",.!?;:)]}%"
+        return first !in ",.!?;:)]}%'’"
     }
 
     private fun endsSentence(builder: StringBuilder): Boolean {
@@ -1801,6 +1849,7 @@ private data class WhisperTranscriptionSegment(
     val text: String = "",
     val speaker: String? = null,
     val offsets: WhisperSegmentOffsets? = null,
+    val tokens: List<WhisperToken> = emptyList(),
     @SerialName("speaker_turn_next")
     val speakerTurnNext: Boolean = false,
 )
@@ -1809,6 +1858,12 @@ private data class WhisperTranscriptionSegment(
 private data class WhisperSegmentOffsets(
     val from: Long = 0,
     val to: Long = 0,
+)
+
+@Serializable
+private data class WhisperToken(
+    val text: String = "",
+    val offsets: WhisperSegmentOffsets? = null,
 )
 
 private data class TranscriptSpan(
