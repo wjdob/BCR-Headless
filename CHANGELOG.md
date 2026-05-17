@@ -15,6 +15,8 @@
 * Preserve config, logs, queued transcriber state, and downloaded transcriber components across in-place module updates
 * Add a configurable self-speaker label and manual local whisper package path in the WebUI
 * Poll transcriber/component progress live in the active Transcriber tab and refresh component size metadata from current remote headers when available
+* Use whisper.cpp word-level timestamp mode for split stereo channels and filter whisper control tokens from transcript text
+* Group split-channel transcript words by detected WAV speech regions before merging the stereo conversation timeline
 
 ### Version 1.0.0
 

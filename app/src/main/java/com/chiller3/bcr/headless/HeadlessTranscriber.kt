@@ -22,6 +22,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 object HeadlessTranscriber {
@@ -481,6 +482,8 @@ object HeadlessTranscriber {
                     diarization = diarization,
                     progressBase = 0,
                     progressSpan = 100,
+                    maxLenChars = 1,
+                    splitOnWord = true,
                 ) { outputBase, rawTranscript ->
                     buildNormalizedTranscript(
                         diarization = diarization,
@@ -673,7 +676,7 @@ object HeadlessTranscriber {
                 diarization = DiarizationMode.Stereo,
                 progressBase = 0,
                 progressSpan = 100,
-                maxLenChars = 24,
+                maxLenChars = 1,
                 splitOnWord = true,
             ) { outputBase, rawTranscript ->
                 buildNormalizedTranscript(
@@ -684,6 +687,9 @@ object HeadlessTranscriber {
                 )
             }
         }
+
+        val leftSpeechRegions = detectMonoSpeechRegions(split.left)
+        val rightSpeechRegions = detectMonoSpeechRegions(split.right)
 
         val leftResult = transcribeSinglePass(
             state = state,
@@ -698,10 +704,14 @@ object HeadlessTranscriber {
             diarization = null,
             progressBase = 0,
             progressSpan = 50,
-            maxLenChars = 24,
+            maxLenChars = 1,
             splitOnWord = true,
         ) { outputBase, _ ->
-            normalizeChannelTranscript(outputBase, speakerSelfName)
+            normalizeChannelTranscript(
+                outputBase = outputBase,
+                primarySpeaker = speakerSelfName,
+                speechRegions = leftSpeechRegions,
+            )
         }
         when (leftResult) {
             TranscriptionExecutionResult.Cancelled -> return leftResult
@@ -724,10 +734,14 @@ object HeadlessTranscriber {
             diarization = null,
             progressBase = 50,
             progressSpan = 50,
-            maxLenChars = 24,
+            maxLenChars = 1,
             splitOnWord = true,
         ) { outputBase, _ ->
-            normalizeChannelTranscript(outputBase, "Speaker B")
+            normalizeChannelTranscript(
+                outputBase = outputBase,
+                primarySpeaker = DEFAULT_REMOTE_SPEAKER_NAME,
+                speechRegions = rightSpeechRegions,
+            )
         }
         when (rightResult) {
             TranscriptionExecutionResult.Cancelled -> return rightResult
@@ -968,6 +982,7 @@ object HeadlessTranscriber {
         outputBase: File,
         primarySpeaker: String,
         alternateSpeaker: String? = null,
+        speechRegions: List<SpeechRegion>? = null,
     ): NormalizedTranscript? {
         val transcription = readWhisperTranscription(outputBase) ?: return null
         val spans = buildChannelTranscriptSpans(transcription, primarySpeaker, alternateSpeaker)
@@ -975,7 +990,7 @@ object HeadlessTranscriber {
             return null
         }
 
-        val merged = regroupStereoSpans(spans)
+        val merged = regroupChannelSpans(spans, speechRegions)
         if (merged.isEmpty()) {
             return null
         }
@@ -1038,6 +1053,65 @@ object HeadlessTranscriber {
         }
 
         return spans
+    }
+
+    private fun regroupChannelSpans(
+        spans: List<TranscriptSpan>,
+        speechRegions: List<SpeechRegion>?,
+    ): List<TranscriptUtterance> {
+        if (spans.isEmpty()) {
+            return emptyList()
+        }
+        if (speechRegions.isNullOrEmpty()) {
+            return regroupStereoSpans(spans)
+        }
+
+        val assignments = spans.mapNotNull { span ->
+            val regionIndex = findSpeechRegionIndex(span, speechRegions) ?: return@mapNotNull null
+            regionIndex to span
+        }
+        if (assignments.isEmpty()) {
+            return regroupStereoSpans(spans)
+        }
+
+        return assignments
+            .groupBy({ it.first }, { it.second })
+            .toSortedMap()
+            .flatMap { (regionIndex, regionSpans) ->
+                val region = speechRegions[regionIndex]
+                regroupStereoSpans(regionSpans)
+                    .map { utterance ->
+                        val startMs = maxOf(region.startMs, utterance.startMs)
+                        val endMs = minOf(region.endMs, maxOf(utterance.endMs, startMs + 1L))
+                        utterance.copy(startMs = startMs, endMs = endMs)
+                    }
+            }
+            .sortedWith(compareBy<TranscriptUtterance> { it.startMs }.thenBy { it.endMs })
+    }
+
+    private fun findSpeechRegionIndex(
+        span: TranscriptSpan,
+        speechRegions: List<SpeechRegion>,
+    ): Int? {
+        val center = (span.startMs + span.endMs) / 2
+        val direct = speechRegions.indexOfFirst { region ->
+            center in (region.startMs - SPEECH_REGION_ASSIGN_TOLERANCE_MS)..(region.endMs + SPEECH_REGION_ASSIGN_TOLERANCE_MS)
+        }
+        if (direct >= 0) {
+            return direct
+        }
+
+        var bestIndex: Int? = null
+        var bestOverlap = 0L
+        for ((index, region) in speechRegions.withIndex()) {
+            val overlap = minOf(span.endMs, region.endMs) - maxOf(span.startMs, region.startMs)
+            if (overlap > bestOverlap) {
+                bestOverlap = overlap
+                bestIndex = index
+            }
+        }
+
+        return bestIndex
     }
 
     private fun regroupStereoSpans(spans: List<TranscriptSpan>): List<TranscriptUtterance> {
@@ -1162,11 +1236,19 @@ object HeadlessTranscriber {
 
     private fun cleanTranscriptFragment(text: String): String =
         text
+            .replace(WHISPER_CONTROL_TOKEN_PATTERN, " ")
             .replace(Regex("""\s+"""), " ")
             .trim()
 
     private fun cleanTokenFragment(text: String): String =
-        cleanTranscriptFragment(text.replace("[SPEAKER_TURN]", " "))
+        if (isWhisperControlToken(text)) {
+            ""
+        } else {
+            cleanTranscriptFragment(text)
+        }
+
+    private fun isWhisperControlToken(text: String): Boolean =
+        WHISPER_CONTROL_TOKEN_PATTERN.matches(text.trim())
 
     private fun needsSpaceBefore(fragment: String): Boolean {
         if (fragment.isEmpty()) {
@@ -1352,7 +1434,7 @@ object HeadlessTranscriber {
 
         throw IllegalStateException(
             "Mono recording requires ${tinydiarizeModelPath.absolutePath} for speaker labels. " +
-                "Enable experimental stereo recording for future calls or add a TinyDiarize model.",
+            "Enable experimental stereo recording for future calls or add a TinyDiarize model.",
         )
     }
 
@@ -1366,6 +1448,106 @@ object HeadlessTranscriber {
 
     private fun inspectWaveChannels(file: File): Int? {
         return readWaveMetadata(file)?.channelCount
+    }
+
+    private fun detectMonoSpeechRegions(recording: File): List<SpeechRegion>? {
+        val metadata = readWaveMetadata(recording) ?: return null
+        if (
+            metadata.audioFormat != 1 ||
+            metadata.channelCount != 1 ||
+            metadata.bitsPerSample != 16 ||
+            metadata.blockAlign <= 0 ||
+            metadata.sampleRate <= 0
+        ) {
+            return null
+        }
+
+        val totalSamples = metadata.dataSize / metadata.blockAlign
+        if (totalSamples <= 0) {
+            return emptyList()
+        }
+
+        val samplesPerWindow = maxOf(1, metadata.sampleRate * SPEECH_WINDOW_MS / 1000)
+        val frames = mutableListOf<SpeechFrame>()
+
+        RandomAccessFile(recording, "r").use { input ->
+            input.seek(metadata.dataOffset)
+            val buffer = ByteArray(samplesPerWindow * metadata.blockAlign)
+            var samplesRead = 0L
+
+            while (samplesRead < totalSamples) {
+                val samplesToRead = minOf(samplesPerWindow.toLong(), totalSamples - samplesRead).toInt()
+                val bytesToRead = samplesToRead * metadata.blockAlign
+                input.readFully(buffer, 0, bytesToRead)
+
+                var sumAbs = 0.0
+                var offset = 0
+                repeat(samplesToRead) {
+                    val sample = readSigned16LittleEndian(buffer, offset)
+                    sumAbs += abs(sample).coerceAtMost(32767) / 32768.0
+                    offset += metadata.blockAlign
+                }
+
+                val startMs = samplesRead * 1000L / metadata.sampleRate
+                val endMs = (samplesRead + samplesToRead) * 1000L / metadata.sampleRate
+                frames += SpeechFrame(
+                    startMs = startMs,
+                    endMs = endMs,
+                    energy = sumAbs / samplesToRead,
+                )
+                samplesRead += samplesToRead
+            }
+        }
+
+        if (frames.isEmpty()) {
+            return emptyList()
+        }
+
+        val sortedEnergies = frames.map { it.energy }.sorted()
+        val noiseFloor = percentile(sortedEnergies, 0.20)
+        val highEnergy = percentile(sortedEnergies, 0.95)
+        if (highEnergy < 0.0015) {
+            return emptyList()
+        }
+        val threshold = maxOf(0.0025, noiseFloor * 3.5, highEnergy * 0.08)
+        val durationMs = totalSamples * 1000L / metadata.sampleRate
+        val regions = mutableListOf<SpeechRegion>()
+        var currentStart: Long? = null
+        var lastActiveEnd = 0L
+
+        fun addRegion(startMs: Long, endMs: Long) {
+            val start = startMs.coerceAtLeast(0)
+            val end = minOf(durationMs, endMs.coerceAtLeast(start))
+            if (end - start < SPEECH_MIN_REGION_MS) {
+                return
+            }
+
+            val previous = regions.lastOrNull()
+            if (previous != null && previous.endMs >= start) {
+                regions[regions.lastIndex] = previous.copy(endMs = maxOf(previous.endMs, end))
+            } else {
+                regions += SpeechRegion(startMs = start, endMs = end)
+            }
+        }
+
+        for (frame in frames) {
+            if (frame.energy < threshold) {
+                continue
+            }
+
+            val paddedStart = (frame.startMs - SPEECH_PAD_START_MS).coerceAtLeast(0)
+            val activeStart = currentStart
+            if (activeStart == null) {
+                currentStart = paddedStart
+            } else if (frame.startMs - lastActiveEnd > SPEECH_MAX_SILENCE_GAP_MS) {
+                addRegion(activeStart, lastActiveEnd + SPEECH_PAD_END_MS)
+                currentStart = paddedStart
+            }
+            lastActiveEnd = frame.endMs
+        }
+
+        currentStart?.let { addRegion(it, lastActiveEnd + SPEECH_PAD_END_MS) }
+        return regions
     }
 
     private fun splitStereoWave(recording: File, workDir: File): StereoSplitFiles? {
@@ -1554,6 +1736,23 @@ object HeadlessTranscriber {
     private fun readLittleEndianInt(input: RandomAccessFile): Int =
         Integer.reverseBytes(input.readInt())
 
+    private fun readSigned16LittleEndian(buffer: ByteArray, offset: Int): Int {
+        val low = buffer[offset].toInt() and 0xff
+        val high = buffer[offset + 1].toInt()
+        return ((high shl 8) or low).toShort().toInt()
+    }
+
+    private fun percentile(sortedValues: List<Double>, percentile: Double): Double {
+        if (sortedValues.isEmpty()) {
+            return 0.0
+        }
+
+        val index = ((sortedValues.size - 1) * percentile)
+            .roundToInt()
+            .coerceIn(0, sortedValues.lastIndex)
+        return sortedValues[index]
+    }
+
     private fun writeDocx(file: File, transcript: String) {
         file.parentFile?.mkdirs()
 
@@ -1615,8 +1814,16 @@ object HeadlessTranscriber {
 
     private val AUDIO_EXTENSIONS = setOf("wav", "flac", "m4a", "mp3", "ogg", "opus", "aac", "amr")
     private val ACTIVE_STATUSES = setOf(JobStatus.Queued.serializedName, JobStatus.Running.serializedName)
+    private val WHISPER_CONTROL_TOKEN_PATTERN =
+        Regex("""(?i)<\|[^|]+?\|>|\[_[A-Z0-9]+(?:_[A-Z0-9]+)*_?\]|\[SPEAKER[ _]TURN\]""")
     private const val DEFAULT_SELF_SPEAKER_NAME = "Speaker A"
     private const val DEFAULT_REMOTE_SPEAKER_NAME = "Speaker B"
+    private const val SPEECH_REGION_ASSIGN_TOLERANCE_MS = 400L
+    private const val SPEECH_WINDOW_MS = 50
+    private const val SPEECH_PAD_START_MS = 160L
+    private const val SPEECH_PAD_END_MS = 220L
+    private const val SPEECH_MAX_SILENCE_GAP_MS = 360L
+    private const val SPEECH_MIN_REGION_MS = 220L
 
     private const val CONTENT_TYPES_XML =
         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"""
@@ -1892,6 +2099,7 @@ private data class WhisperSegmentOffsets(
 @Serializable
 private data class WhisperToken(
     val text: String = "",
+    val id: Long? = null,
     val offsets: WhisperSegmentOffsets? = null,
 )
 
@@ -1900,6 +2108,17 @@ private data class TranscriptSpan(
     val endMs: Long,
     val speaker: String,
     val text: String,
+)
+
+private data class SpeechRegion(
+    val startMs: Long,
+    val endMs: Long,
+)
+
+private data class SpeechFrame(
+    val startMs: Long,
+    val endMs: Long,
+    val energy: Double,
 )
 
 private data class PendingTranscriptSpan(

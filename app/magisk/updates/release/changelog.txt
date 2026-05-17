@@ -1,8 +1,8 @@
-BCR Headless 1.1.0-test.9
+BCR Headless 1.1.0-test.10
 
-- Preserved configuration, recording history, queued transcriber state, and downloaded transcriber components across in-place module updates
-- Added a configurable self-speaker transcript label and replaced unreliable WebUI file picking with a manual local whisper package path
-- Added live transcriber/component polling in the active Transcriber tab and refreshed component metadata so estimated sizes use current remote headers when available
+- Fixed stereo transcript diarization by using whisper.cpp word-level timestamp mode for split channels
+- Filtered whisper.cpp control/timestamp tokens such as [_BEG_] and [_TT_*] from generated transcript text
+- Added WAV speech-region grouping so left/right channel transcripts are broken into readable timestamped turns
 - Preserved the side-by-side test package line for parallel validation on-device
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.9/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.10/CHANGELOG.md
