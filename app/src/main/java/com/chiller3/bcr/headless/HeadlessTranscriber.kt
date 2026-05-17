@@ -732,70 +732,73 @@ object HeadlessTranscriber {
         val leftSpeechRegions = detectMonoSpeechRegions(split.left)
         val rightSpeechRegions = detectMonoSpeechRegions(split.right)
 
-        val fullPass = executeWhisperPass(
-            state = state,
-            job = job,
-            startedAt = startedAt,
-            activeFile = activeFile,
-            whisperPath = whisperPath,
-            modelPath = modelPath,
-            recording = activeFile,
-            language = language,
-            outputBase = File(workDir, "whisper-stereo"),
-            diarization = null,
-            progressBase = 0,
-            progressSpan = 34,
-        }
-        when (fullPass) {
+        val fullPass = when (
+            val pass = executeWhisperPass(
+                state = state,
+                job = job,
+                startedAt = startedAt,
+                activeFile = activeFile,
+                whisperPath = whisperPath,
+                modelPath = modelPath,
+                recording = activeFile,
+                language = language,
+                outputBase = File(workDir, "whisper-stereo"),
+                diarization = null,
+                progressBase = 0,
+                progressSpan = 34,
+            )
+        ) {
             WhisperPassExecutionResult.Cancelled -> return TranscriptionExecutionResult.Cancelled
             is WhisperPassExecutionResult.Failure -> {
-                return TranscriptionExecutionResult.Failure("Stereo transcription failed: ${fullPass.message}")
+                return TranscriptionExecutionResult.Failure("Stereo transcription failed: ${pass.message}")
             }
-            is WhisperPassExecutionResult.Success -> Unit
+            is WhisperPassExecutionResult.Success -> pass
         }
 
-        val leftPass = executeWhisperPass(
-            state = state,
-            job = job,
-            startedAt = startedAt,
-            activeFile = activeFile,
-            whisperPath = whisperPath,
-            modelPath = modelPath,
-            recording = split.left,
-            language = language,
-            outputBase = File(workDir, "whisper-left"),
-            diarization = null,
-            progressBase = 34,
-            progressSpan = 33,
-        }
-        when (leftPass) {
+        val leftPass = when (
+            val pass = executeWhisperPass(
+                state = state,
+                job = job,
+                startedAt = startedAt,
+                activeFile = activeFile,
+                whisperPath = whisperPath,
+                modelPath = modelPath,
+                recording = split.left,
+                language = language,
+                outputBase = File(workDir, "whisper-left"),
+                diarization = null,
+                progressBase = 34,
+                progressSpan = 33,
+            )
+        ) {
             WhisperPassExecutionResult.Cancelled -> return TranscriptionExecutionResult.Cancelled
             is WhisperPassExecutionResult.Failure -> {
-                return TranscriptionExecutionResult.Failure("Left channel transcription failed: ${leftPass.message}")
+                return TranscriptionExecutionResult.Failure("Left channel transcription failed: ${pass.message}")
             }
-            is WhisperPassExecutionResult.Success -> Unit
+            is WhisperPassExecutionResult.Success -> pass
         }
 
-        val rightPass = executeWhisperPass(
-            state = state,
-            job = job,
-            startedAt = startedAt,
-            activeFile = activeFile,
-            whisperPath = whisperPath,
-            modelPath = modelPath,
-            recording = split.right,
-            language = language,
-            outputBase = File(workDir, "whisper-right"),
-            diarization = null,
-            progressBase = 67,
-            progressSpan = 33,
-        )
-        when (rightPass) {
+        val rightPass = when (
+            val pass = executeWhisperPass(
+                state = state,
+                job = job,
+                startedAt = startedAt,
+                activeFile = activeFile,
+                whisperPath = whisperPath,
+                modelPath = modelPath,
+                recording = split.right,
+                language = language,
+                outputBase = File(workDir, "whisper-right"),
+                diarization = null,
+                progressBase = 67,
+                progressSpan = 33,
+            )
+        ) {
             WhisperPassExecutionResult.Cancelled -> return TranscriptionExecutionResult.Cancelled
             is WhisperPassExecutionResult.Failure -> {
-                return TranscriptionExecutionResult.Failure("Right channel transcription failed: ${rightPass.message}")
+                return TranscriptionExecutionResult.Failure("Right channel transcription failed: ${pass.message}")
             }
-            is WhisperPassExecutionResult.Success -> Unit
+            is WhisperPassExecutionResult.Success -> pass
         }
 
         val normalized = buildStereoHybridTranscript(
