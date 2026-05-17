@@ -805,8 +805,8 @@ object HeadlessTranscriber {
             fullOutputBase = fullPass.outputBase,
             leftOutputBase = leftPass.outputBase,
             rightOutputBase = rightPass.outputBase,
-            leftSpeechRegions = leftSpeechRegions,
-            rightSpeechRegions = rightSpeechRegions,
+            leftSpeechRegions = leftSpeechRegions.orEmpty(),
+            rightSpeechRegions = rightSpeechRegions.orEmpty(),
             speakerSelfName = speakerSelfName,
         ) ?: return TranscriptionExecutionResult.Failure(
             "Whisper completed but did not emit stable stereo diarization data",
