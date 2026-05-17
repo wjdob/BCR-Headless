@@ -1,6 +1,6 @@
 {
-    "zipUrl": "https://github.com/wjdob/BCR-Headless-Test/releases/download/v1.1.0-test.6/BCR-Headless-1.1.0-test.6-headless.zip",
-    "changelog": "https://github.com/wjdob/BCR-Headless-Test/raw/v1.1.0-test.6/app/magisk/updates/release/changelog.txt",
-    "version": "1.1.0-test.6",
-    "versionCode": 1010006
+    "zipUrl": "https://github.com/wjdob/BCR-Headless-Test/releases/download/v1.1.0-test.7/BCR-Headless-1.1.0-test.7-headless.zip",
+    "changelog": "https://github.com/wjdob/BCR-Headless-Test/raw/v1.1.0-test.7/app/magisk/updates/release/changelog.txt",
+    "version": "1.1.0-test.7",
+    "versionCode": 1010007
 }

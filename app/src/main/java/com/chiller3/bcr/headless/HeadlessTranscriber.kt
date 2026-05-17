@@ -6,10 +6,14 @@
 package com.chiller3.bcr.headless
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
@@ -444,54 +448,61 @@ object HeadlessTranscriber {
         notifier.showStarted(recording, diarization)
 
         val workDir = File(state.workDir, job.id).apply { mkdirs() }
-        val outputBase = File(workDir, "whisper")
-        val command = buildWhisperCommand(
-            whisperPath = whisperPath,
-            modelPath = chosenModel,
-            recording = recording,
-            language = job.language,
-            outputBase = outputBase,
-            diarization = diarization,
-        )
-
-        val result = try {
-            runWhisperProcess(
-                command = command,
-                state = state,
-                job = job,
-                startedAt = startedAt,
-                activeFile = recording,
-                diarization = diarization,
-            )
+        val execution = try {
+            when (diarization) {
+                DiarizationMode.Stereo -> transcribeStereoRecording(
+                    state = state,
+                    job = job,
+                    startedAt = startedAt,
+                    activeFile = recording,
+                    whisperPath = whisperPath,
+                    modelPath = modelPath,
+                    language = job.language,
+                    workDir = workDir,
+                )
+                DiarizationMode.TinyDiarize -> transcribeSinglePass(
+                    state = state,
+                    job = job,
+                    startedAt = startedAt,
+                    activeFile = recording,
+                    whisperPath = whisperPath,
+                    modelPath = chosenModel,
+                    recording = recording,
+                    language = job.language,
+                    outputBase = File(workDir, "whisper"),
+                    diarization = diarization,
+                    progressBase = 0,
+                    progressSpan = 100,
+                ) { outputBase, rawTranscript ->
+                    buildNormalizedTranscript(
+                        diarization = diarization,
+                        outputBase = outputBase,
+                        rawTranscript = rawTranscript,
+                    )
+                }
+            }
         } catch (e: Exception) {
             fail(e.localizedMessage ?: e.javaClass.simpleName)
             return
         }
 
-        if (result.cancelled) {
-            state.queue.replace(job.id) {
-                it.copy(
-                    status = JobStatus.Cancelled.serializedName,
-                    error = "Stopped by user",
-                    completedAt = Instant.now().toString(),
-                )
+        val normalized = when (execution) {
+            TranscriptionExecutionResult.Cancelled -> {
+                state.queue.replace(job.id) {
+                    it.copy(
+                        status = JobStatus.Cancelled.serializedName,
+                        error = "Stopped by user",
+                        completedAt = Instant.now().toString(),
+                    )
+                }
+                notifier.showFailure(recording, "Stopped by user")
+                return
             }
-            notifier.showFailure(recording, "Stopped by user")
-            return
-        }
-
-        if (result.exitCode != 0) {
-            fail(result.stderr.ifBlank { result.stdout }.ifBlank { "whisper.cpp exited with ${result.exitCode}" })
-            return
-        }
-
-        val rawTranscript = result.stdout.ifBlank {
-            File("${outputBase.absolutePath}.txt").takeIf { it.isFile }?.readText().orEmpty()
-        }
-        val normalized = normalizeSpeakerTranscript(rawTranscript)
-        if (!normalized.hasSpeakerLabels) {
-            fail("Whisper completed but did not emit speaker labels for ${diarization.serializedName}")
-            return
+            is TranscriptionExecutionResult.Failure -> {
+                fail(execution.message)
+                return
+            }
+            is TranscriptionExecutionResult.Success -> execution.transcript
         }
 
         transcript.parentFile?.mkdirs()
@@ -527,7 +538,7 @@ object HeadlessTranscriber {
         recording: File,
         language: String,
         outputBase: File,
-        diarization: DiarizationMode,
+        diarization: DiarizationMode?,
     ): List<String> {
         val command = mutableListOf(
             whisperPath.absolutePath,
@@ -546,11 +557,176 @@ object HeadlessTranscriber {
         )
 
         when (diarization) {
-            DiarizationMode.Stereo -> command += "-di"
+            DiarizationMode.Stereo -> command += listOf("-di", "-ml", "24", "-sow")
             DiarizationMode.TinyDiarize -> command += "-tdrz"
+            null -> Unit
         }
 
         return command
+    }
+
+    private fun transcribeSinglePass(
+        state: TranscriberState,
+        job: TranscriptionJob,
+        startedAt: Instant,
+        activeFile: File,
+        whisperPath: File,
+        modelPath: File,
+        recording: File,
+        language: String,
+        outputBase: File,
+        diarization: DiarizationMode?,
+        progressBase: Int,
+        progressSpan: Int,
+        normalizer: (File, String) -> NormalizedTranscript?,
+    ): TranscriptionExecutionResult {
+        val command = buildWhisperCommand(
+            whisperPath = whisperPath,
+            modelPath = modelPath,
+            recording = recording,
+            language = language,
+            outputBase = outputBase,
+            diarization = diarization,
+        )
+
+        val result = runWhisperProcess(
+            command = command,
+            state = state,
+            job = job,
+            startedAt = startedAt,
+            activeFile = activeFile,
+            diarization = diarization ?: DiarizationMode.Stereo,
+            progressBase = progressBase,
+            progressSpan = progressSpan,
+        )
+
+        if (result.cancelled) {
+            return TranscriptionExecutionResult.Cancelled
+        }
+        if (result.exitCode != 0) {
+            return TranscriptionExecutionResult.Failure(
+                result.stderr.ifBlank { result.stdout }.ifBlank { "whisper.cpp exited with ${result.exitCode}" },
+            )
+        }
+
+        val rawTranscript = result.stdout.ifBlank {
+            File("${outputBase.absolutePath}.txt").takeIf { it.isFile }?.readText().orEmpty()
+        }
+        val normalized = normalizer(outputBase, rawTranscript)
+            ?: return TranscriptionExecutionResult.Failure(
+                "Whisper completed but did not emit timestamped transcription data",
+            )
+        if (!normalized.hasSpeakerLabels) {
+            return TranscriptionExecutionResult.Failure(
+                "Whisper completed but did not emit speaker labels for ${diarization?.serializedName ?: "stereo"}",
+            )
+        }
+
+        return TranscriptionExecutionResult.Success(normalized)
+    }
+
+    private fun transcribeStereoRecording(
+        state: TranscriberState,
+        job: TranscriptionJob,
+        startedAt: Instant,
+        activeFile: File,
+        whisperPath: File,
+        modelPath: File,
+        language: String,
+        workDir: File,
+    ): TranscriptionExecutionResult {
+        val split = splitStereoWave(activeFile, workDir)
+        if (split == null) {
+            return transcribeSinglePass(
+                state = state,
+                job = job,
+                startedAt = startedAt,
+                activeFile = activeFile,
+                whisperPath = whisperPath,
+                modelPath = modelPath,
+                recording = activeFile,
+                language = language,
+                outputBase = File(workDir, "whisper"),
+                diarization = DiarizationMode.Stereo,
+                progressBase = 0,
+                progressSpan = 100,
+            ) { outputBase, rawTranscript ->
+                buildNormalizedTranscript(
+                    diarization = DiarizationMode.Stereo,
+                    outputBase = outputBase,
+                    rawTranscript = rawTranscript,
+                )
+            }
+        }
+
+        val leftResult = transcribeSinglePass(
+            state = state,
+            job = job,
+            startedAt = startedAt,
+            activeFile = activeFile,
+            whisperPath = whisperPath,
+            modelPath = modelPath,
+            recording = split.left,
+            language = language,
+            outputBase = File(workDir, "whisper-left"),
+            diarization = null,
+            progressBase = 0,
+            progressSpan = 50,
+        ) { outputBase, _ ->
+            normalizeChannelTranscript(outputBase, "Speaker A")
+        }
+        when (leftResult) {
+            TranscriptionExecutionResult.Cancelled -> return leftResult
+            is TranscriptionExecutionResult.Failure -> {
+                return TranscriptionExecutionResult.Failure("Left channel transcription failed: ${leftResult.message}")
+            }
+            is TranscriptionExecutionResult.Success -> Unit
+        }
+
+        val rightResult = transcribeSinglePass(
+            state = state,
+            job = job,
+            startedAt = startedAt,
+            activeFile = activeFile,
+            whisperPath = whisperPath,
+            modelPath = modelPath,
+            recording = split.right,
+            language = language,
+            outputBase = File(workDir, "whisper-right"),
+            diarization = null,
+            progressBase = 50,
+            progressSpan = 50,
+        ) { outputBase, _ ->
+            normalizeChannelTranscript(outputBase, "Speaker B")
+        }
+        when (rightResult) {
+            TranscriptionExecutionResult.Cancelled -> return rightResult
+            is TranscriptionExecutionResult.Failure -> {
+                return TranscriptionExecutionResult.Failure("Right channel transcription failed: ${rightResult.message}")
+            }
+            is TranscriptionExecutionResult.Success -> Unit
+        }
+
+        val utterances = mergeAdjacentUtterances(
+            (
+                leftResult.transcript.utterances +
+                    rightResult.transcript.utterances
+                )
+                .sortedWith(compareBy<TranscriptUtterance> { it.startMs }.thenBy { it.endMs }.thenBy { it.speaker }),
+        )
+        if (utterances.isEmpty()) {
+            return TranscriptionExecutionResult.Failure(
+                "Whisper completed but did not emit timestamped transcription data for stereo channels",
+            )
+        }
+
+        return TranscriptionExecutionResult.Success(
+            NormalizedTranscript(
+                text = formatTranscriptUtterances(utterances),
+                hasSpeakerLabels = true,
+                utterances = utterances,
+            ),
+        )
     }
 
     private fun runWhisperProcess(
@@ -560,6 +736,8 @@ object HeadlessTranscriber {
         startedAt: Instant,
         activeFile: File,
         diarization: DiarizationMode,
+        progressBase: Int,
+        progressSpan: Int,
     ): ProcessResult {
         val stdout = StringBuilder()
         val stderr = StringBuilder()
@@ -578,14 +756,15 @@ object HeadlessTranscriber {
                     }
 
                     parseProgress(line)?.let { progress ->
-                        val etaSeconds = estimateEtaSeconds(startedAt, progress, state.queue.load())
-                        state.queue.replace(job.id) { it.copy(progress = progress) }
+                        val scaledProgress = scaleProgress(progress, progressBase, progressSpan)
+                        val etaSeconds = estimateEtaSeconds(startedAt, scaledProgress, state.queue.load())
+                        state.queue.replace(job.id) { it.copy(progress = scaledProgress) }
                         state.runtime.save(
                             TranscriberRuntime(
                                 state = "running",
                                 activeJobId = job.id,
                                 activeFile = activeFile.absolutePath,
-                                progress = progress,
+                                progress = scaledProgress,
                                 etaSeconds = etaSeconds,
                                 diarizationMode = diarization.serializedName,
                             ),
@@ -627,6 +806,346 @@ object HeadlessTranscriber {
                     cancelled = false,
                 )
             }
+        }
+    }
+
+    private fun buildNormalizedTranscript(
+        diarization: DiarizationMode,
+        outputBase: File,
+        rawTranscript: String,
+    ): NormalizedTranscript = when (diarization) {
+        DiarizationMode.Stereo -> normalizeStereoTranscript(outputBase) ?: normalizeSpeakerTranscript(rawTranscript)
+        DiarizationMode.TinyDiarize -> normalizeTinydiarizeTranscript(outputBase) ?: normalizeSpeakerTranscript(rawTranscript)
+    }
+
+    private fun normalizeStereoTranscript(outputBase: File): NormalizedTranscript? {
+        val transcription = readWhisperTranscription(outputBase) ?: return null
+        val pending = transcription.mapNotNull { segment ->
+            val offsets = segment.offsets ?: return@mapNotNull null
+            val text = cleanTranscriptFragment(segment.text)
+            if (text.isEmpty()) {
+                return@mapNotNull null
+            }
+
+            PendingTranscriptSpan(
+                startMs = offsets.from.coerceAtLeast(0),
+                endMs = offsets.to.coerceAtLeast(offsets.from),
+                speaker = mapStereoSpeaker(segment.speaker),
+                text = text,
+            )
+        }
+        if (pending.isEmpty()) {
+            return null
+        }
+
+        val spans = resolvePendingStereoSpeakers(pending)
+
+        val utterances = regroupStereoSpans(spans)
+        if (utterances.isEmpty()) {
+            return null
+        }
+
+        return NormalizedTranscript(
+            text = formatTranscriptUtterances(utterances),
+            hasSpeakerLabels = utterances.any { it.speaker.startsWith("Speaker ") },
+            utterances = utterances,
+        )
+    }
+
+    private fun resolvePendingStereoSpeakers(pending: List<PendingTranscriptSpan>): List<TranscriptSpan> {
+        val resolved = mutableListOf<TranscriptSpan>()
+        var lastSpeaker = pending.firstNotNullOfOrNull { it.speaker } ?: "Speaker A"
+
+        for (index in pending.indices) {
+            val current = pending[index]
+            val speaker = current.speaker
+                ?: pending.drop(index + 1).firstNotNullOfOrNull { it.speaker }
+                ?: lastSpeaker
+            lastSpeaker = speaker
+            resolved += TranscriptSpan(
+                startMs = current.startMs,
+                endMs = current.endMs,
+                speaker = speaker,
+                text = current.text,
+            )
+        }
+
+        return resolved
+    }
+
+    private fun normalizeTinydiarizeTranscript(outputBase: File): NormalizedTranscript? {
+        val transcription = readWhisperTranscription(outputBase) ?: return null
+        val utterances = mutableListOf<TranscriptUtterance>()
+        var speakerIndex = 0
+
+        for (segment in transcription) {
+            val offsets = segment.offsets ?: continue
+            val text = cleanTranscriptFragment(segment.text)
+                .replace(" [SPEAKER_TURN]", "")
+                .trim()
+            if (text.isEmpty()) {
+                if (segment.speakerTurnNext) {
+                    speakerIndex = (speakerIndex + 1) % 2
+                }
+                continue
+            }
+
+            val speaker = if (speakerIndex % 2 == 0) {
+                "Speaker A"
+            } else {
+                "Speaker B"
+            }
+            utterances += TranscriptUtterance(
+                startMs = offsets.from.coerceAtLeast(0),
+                endMs = offsets.to.coerceAtLeast(offsets.from),
+                speaker = speaker,
+                text = text,
+            )
+
+            if (segment.speakerTurnNext) {
+                speakerIndex = (speakerIndex + 1) % 2
+            }
+        }
+
+        if (utterances.isEmpty()) {
+            return null
+        }
+
+        val merged = mergeAdjacentUtterances(utterances)
+        return NormalizedTranscript(
+            text = formatTranscriptUtterances(merged),
+            hasSpeakerLabels = true,
+            utterances = merged,
+        )
+    }
+
+    private fun readWhisperTranscription(outputBase: File): List<WhisperTranscriptionSegment>? {
+        val file = File("${outputBase.absolutePath}.json")
+        if (!file.isFile) {
+            return null
+        }
+
+        return try {
+            val payload = JSON.decodeFromString<WhisperTranscriptionPayload>(file.readText())
+            payload.transcription
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun normalizeChannelTranscript(
+        outputBase: File,
+        primarySpeaker: String,
+        alternateSpeaker: String? = null,
+    ): NormalizedTranscript? {
+        val transcription = readWhisperTranscription(outputBase) ?: return null
+        val utterances = mutableListOf<TranscriptUtterance>()
+        var speakerIndex = 0
+
+        for (segment in transcription) {
+            val offsets = segment.offsets ?: continue
+            val text = cleanTranscriptFragment(segment.text)
+                .replace(" [SPEAKER_TURN]", "")
+                .trim()
+            if (text.isEmpty()) {
+                if (alternateSpeaker != null && segment.speakerTurnNext) {
+                    speakerIndex = (speakerIndex + 1) % 2
+                }
+                continue
+            }
+
+            val speaker = if (alternateSpeaker != null && speakerIndex % 2 == 1) {
+                alternateSpeaker
+            } else {
+                primarySpeaker
+            }
+            utterances += TranscriptUtterance(
+                startMs = offsets.from.coerceAtLeast(0),
+                endMs = offsets.to.coerceAtLeast(offsets.from),
+                speaker = speaker,
+                text = text,
+            )
+
+            if (alternateSpeaker != null && segment.speakerTurnNext) {
+                speakerIndex = (speakerIndex + 1) % 2
+            }
+        }
+
+        if (utterances.isEmpty()) {
+            return null
+        }
+
+        val merged = mergeAdjacentUtterances(utterances)
+        return NormalizedTranscript(
+            text = formatTranscriptUtterances(merged),
+            hasSpeakerLabels = merged.any { it.speaker.startsWith("Speaker ") },
+            utterances = merged,
+        )
+    }
+
+    private fun regroupStereoSpans(spans: List<TranscriptSpan>): List<TranscriptUtterance> {
+        if (spans.isEmpty()) {
+            return emptyList()
+        }
+
+        val sorted = spans.sortedWith(compareBy<TranscriptSpan> { it.startMs }.thenBy { it.endMs })
+        val utterances = mutableListOf<TranscriptUtterance>()
+        var currentSpeaker: String? = null
+        var currentStart = 0L
+        var currentEnd = 0L
+        val currentText = StringBuilder()
+
+        fun flushCurrent() {
+            val speaker = currentSpeaker ?: return
+            val text = currentText.toString().trim()
+            if (text.isNotEmpty()) {
+                utterances += TranscriptUtterance(
+                    startMs = currentStart,
+                    endMs = currentEnd,
+                    speaker = speaker,
+                    text = text,
+                )
+            }
+
+            currentSpeaker = null
+            currentStart = 0L
+            currentEnd = 0L
+            currentText.clear()
+        }
+
+        for (index in sorted.indices) {
+            val span = sorted[index]
+            if (currentSpeaker == null) {
+                currentSpeaker = span.speaker
+                currentStart = span.startMs
+                currentEnd = span.endMs
+            } else if (currentSpeaker != span.speaker) {
+                flushCurrent()
+                currentSpeaker = span.speaker
+                currentStart = span.startMs
+                currentEnd = span.endMs
+            } else {
+                currentEnd = maxOf(currentEnd, span.endMs)
+            }
+
+            appendTranscriptFragment(currentText, span.text)
+
+            val next = sorted.getOrNull(index + 1)
+            val nextGap = next?.let { it.startMs - currentEnd } ?: Long.MAX_VALUE
+            val shouldFlush =
+                next == null ||
+                    next.speaker != currentSpeaker ||
+                    nextGap > 900L ||
+                    (endsSentence(currentText) && nextGap > 250L) ||
+                    currentText.length >= 160
+
+            if (shouldFlush) {
+                flushCurrent()
+            }
+        }
+
+        return mergeAdjacentUtterances(utterances)
+    }
+
+    private fun mergeAdjacentUtterances(utterances: List<TranscriptUtterance>): List<TranscriptUtterance> {
+        if (utterances.isEmpty()) {
+            return emptyList()
+        }
+
+        val merged = mutableListOf<TranscriptUtterance>()
+        for (utterance in utterances.sortedWith(compareBy<TranscriptUtterance> { it.startMs }.thenBy { it.endMs })) {
+            val previous = merged.lastOrNull()
+            if (
+                previous != null &&
+                previous.speaker == utterance.speaker &&
+                utterance.startMs - previous.endMs <= 350L &&
+                previous.text.length + utterance.text.length < 180
+            ) {
+                merged[merged.lastIndex] = previous.copy(
+                    endMs = maxOf(previous.endMs, utterance.endMs),
+                    text = joinTranscriptText(previous.text, utterance.text),
+                )
+            } else {
+                merged += utterance
+            }
+        }
+
+        return merged
+    }
+
+    private fun formatTranscriptUtterances(utterances: List<TranscriptUtterance>): String = utterances.joinToString("\n") { utterance ->
+        "[${formatTranscriptTimestamp(utterance.startMs)} --> ${formatTranscriptTimestamp(utterance.endMs)}] ${utterance.speaker}: ${utterance.text}"
+    }
+
+    private fun appendTranscriptFragment(builder: StringBuilder, fragment: String) {
+        val cleaned = cleanTranscriptFragment(fragment)
+        if (cleaned.isEmpty()) {
+            return
+        }
+
+        if (builder.isEmpty()) {
+            builder.append(cleaned)
+            return
+        }
+
+        if (needsSpaceBefore(cleaned)) {
+            builder.append(' ')
+        }
+        builder.append(cleaned)
+    }
+
+    private fun joinTranscriptText(left: String, right: String): String =
+        buildString {
+            append(left.trim())
+            if (needsSpaceBefore(right.trim())) {
+                append(' ')
+            }
+            append(right.trim())
+        }.trim()
+
+    private fun cleanTranscriptFragment(text: String): String =
+        text
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+    private fun needsSpaceBefore(fragment: String): Boolean {
+        if (fragment.isEmpty()) {
+            return false
+        }
+
+        val first = fragment.first()
+        return first !in ",.!?;:)]}%"
+    }
+
+    private fun endsSentence(builder: StringBuilder): Boolean {
+        val text = builder.toString().trimEnd()
+        if (text.isEmpty()) {
+            return false
+        }
+
+        return text.last() in ".!?"
+    }
+
+    private fun formatTranscriptTimestamp(totalMs: Long): String {
+        val safeMs = totalMs.coerceAtLeast(0)
+        val hours = safeMs / 3_600_000
+        val minutes = (safeMs % 3_600_000) / 60_000
+        val seconds = (safeMs % 60_000) / 1_000
+        val millis = safeMs % 1_000
+        return "%02d:%02d:%02d.%03d".format(hours, minutes, seconds, millis)
+    }
+
+    private fun mapStereoSpeaker(rawSpeaker: String?): String? {
+        val normalized = rawSpeaker
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?.replace(" ", "")
+            ?: return null
+
+        return when (normalized) {
+            "0", "a", "speakera" -> "Speaker A"
+            "1", "b", "speakerb" -> "Speaker B"
+            else -> null
         }
     }
 
@@ -694,6 +1213,12 @@ object HeadlessTranscriber {
 
         return NormalizedTranscript(lines.joinToString("\n"), sawSpeaker)
     }
+
+    private fun scaleProgress(
+        progress: Int,
+        base: Int,
+        span: Int,
+    ): Int = (base + (progress.coerceIn(0, 100) * span / 100.0).roundToInt()).coerceIn(0, 100)
 
     private fun parseProgress(line: String): Int? {
         val patterns = listOf(
@@ -772,31 +1297,194 @@ object HeadlessTranscriber {
     }
 
     private fun inspectWaveChannels(file: File): Int? {
-        if (!file.isFile || file.length() < 24) {
+        return readWaveMetadata(file)?.channelCount
+    }
+
+    private fun splitStereoWave(recording: File, workDir: File): StereoSplitFiles? {
+        if (recording.extension.lowercase(Locale.ROOT) != "wav") {
+            return null
+        }
+
+        val metadata = readWaveMetadata(recording) ?: return null
+        if (
+            metadata.audioFormat != 1 ||
+            metadata.channelCount != 2 ||
+            metadata.bitsPerSample <= 0 ||
+            metadata.bitsPerSample % 8 != 0
+        ) {
+            return null
+        }
+
+        val bytesPerSample = metadata.bitsPerSample / 8
+        val expectedBlockAlign = metadata.channelCount * bytesPerSample
+        if (metadata.blockAlign != expectedBlockAlign || metadata.blockAlign <= 0) {
+            return null
+        }
+
+        val frameCount = metadata.dataSize / metadata.blockAlign
+        if (frameCount <= 0) {
+            return null
+        }
+
+        val left = File(workDir, "${recording.nameWithoutExtension}-left.wav")
+        val right = File(workDir, "${recording.nameWithoutExtension}-right.wav")
+        val monoDataSize = frameCount * bytesPerSample.toLong()
+
+        RandomAccessFile(recording, "r").use { input ->
+            input.seek(metadata.dataOffset)
+            BufferedOutputStream(left.outputStream()).use { leftOut ->
+                BufferedOutputStream(right.outputStream()).use { rightOut ->
+                    writeWaveHeader(
+                        output = leftOut,
+                        sampleRate = metadata.sampleRate,
+                        channelCount = 1,
+                        bitsPerSample = metadata.bitsPerSample,
+                        dataSize = monoDataSize,
+                    )
+                    writeWaveHeader(
+                        output = rightOut,
+                        sampleRate = metadata.sampleRate,
+                        channelCount = 1,
+                        bitsPerSample = metadata.bitsPerSample,
+                        dataSize = monoDataSize,
+                    )
+
+                    val framesPerChunk = 2048
+                    val buffer = ByteArray(metadata.blockAlign * framesPerChunk)
+                    var framesRemaining = frameCount
+
+                    while (framesRemaining > 0) {
+                        val framesToRead = minOf(framesPerChunk.toLong(), framesRemaining).toInt()
+                        val bytesToRead = framesToRead * metadata.blockAlign
+                        input.readFully(buffer, 0, bytesToRead)
+
+                        var offset = 0
+                        repeat(framesToRead) {
+                            leftOut.write(buffer, offset, bytesPerSample)
+                            rightOut.write(buffer, offset + bytesPerSample, bytesPerSample)
+                            offset += metadata.blockAlign
+                        }
+
+                        framesRemaining -= framesToRead
+                    }
+                }
+            }
+        }
+
+        return StereoSplitFiles(left = left, right = right)
+    }
+
+    private fun readWaveMetadata(file: File): WaveMetadata? {
+        if (!file.isFile || file.length() < 44) {
             return null
         }
 
         return try {
-            file.inputStream().use { stream ->
-                val header = ByteArray(24)
-                if (stream.read(header) != header.size) {
-                    return null
-                }
+            RandomAccessFile(file, "r").use { input ->
+                val header = ByteArray(12)
+                input.readFully(header)
                 val riff = String(header, 0, 4, Charsets.US_ASCII)
                 val wave = String(header, 8, 4, Charsets.US_ASCII)
                 if (riff != "RIFF" || wave != "WAVE") {
                     return null
                 }
 
-                ByteBuffer.wrap(header, 22, 2)
-                    .order(ByteOrder.LITTLE_ENDIAN)
-                    .short
-                    .toInt()
+                var audioFormat: Int? = null
+                var channelCount: Int? = null
+                var sampleRate: Int? = null
+                var blockAlign: Int? = null
+                var bitsPerSample: Int? = null
+                var dataOffset: Long? = null
+                var dataSize: Long? = null
+
+                while (input.filePointer + 8 <= input.length()) {
+                    val chunkId = ByteArray(4).also(input::readFully).toString(Charsets.US_ASCII)
+                    val chunkSize = readLittleEndianInt(input).toLong() and 0xffffffffL
+                    val chunkDataOffset = input.filePointer
+
+                    when (chunkId) {
+                        "fmt " -> {
+                            if (chunkSize < 16) {
+                                return null
+                            }
+
+                            audioFormat = readLittleEndianShort(input)
+                            channelCount = readLittleEndianShort(input)
+                            sampleRate = readLittleEndianInt(input)
+                            readLittleEndianInt(input) // byte rate
+                            blockAlign = readLittleEndianShort(input)
+                            bitsPerSample = readLittleEndianShort(input)
+                        }
+                        "data" -> {
+                            dataOffset = chunkDataOffset
+                            dataSize = chunkSize
+                        }
+                    }
+
+                    input.seek(chunkDataOffset + chunkSize + (chunkSize and 1L))
+                }
+
+                val resolvedAudioFormat = audioFormat ?: return null
+                val resolvedChannelCount = channelCount ?: return null
+                val resolvedSampleRate = sampleRate ?: return null
+                val resolvedBlockAlign = blockAlign ?: return null
+                val resolvedBitsPerSample = bitsPerSample ?: return null
+                val resolvedDataOffset = dataOffset ?: return null
+                val resolvedDataSize = dataSize ?: return null
+
+                WaveMetadata(
+                    audioFormat = resolvedAudioFormat,
+                    channelCount = resolvedChannelCount,
+                    sampleRate = resolvedSampleRate,
+                    blockAlign = resolvedBlockAlign,
+                    bitsPerSample = resolvedBitsPerSample,
+                    dataOffset = resolvedDataOffset,
+                    dataSize = resolvedDataSize,
+                )
             }
         } catch (_: Exception) {
             null
         }
     }
+
+    private fun writeWaveHeader(
+        output: OutputStream,
+        sampleRate: Int,
+        channelCount: Int,
+        bitsPerSample: Int,
+        dataSize: Long,
+    ) {
+        val bytesPerSample = bitsPerSample / 8
+        val blockAlign = channelCount * bytesPerSample
+        val byteRate = sampleRate * blockAlign
+        val chunkSize = if (dataSize >= Int.MAX_VALUE) 0 else dataSize.toInt() + 36
+        val resolvedDataSize = if (dataSize >= Int.MAX_VALUE) 0 else dataSize.toInt()
+
+        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII))
+            putInt(chunkSize)
+            put("WAVE".toByteArray(Charsets.US_ASCII))
+            put("fmt ".toByteArray(Charsets.US_ASCII))
+            putInt(16)
+            putShort(1)
+            putShort(channelCount.toShort())
+            putInt(sampleRate)
+            putInt(byteRate)
+            putShort(blockAlign.toShort())
+            putShort(bitsPerSample.toShort())
+            put("data".toByteArray(Charsets.US_ASCII))
+            putInt(resolvedDataSize)
+            flip()
+        }
+
+        output.write(header.array(), 0, header.remaining())
+    }
+
+    private fun readLittleEndianShort(input: RandomAccessFile): Int =
+        java.lang.Short.toUnsignedInt(java.lang.Short.reverseBytes(input.readShort()))
+
+    private fun readLittleEndianInt(input: RandomAccessFile): Int =
+        Integer.reverseBytes(input.readInt())
 
     private fun writeDocx(file: File, transcript: String) {
         file.parentFile?.mkdirs()
@@ -1094,6 +1782,69 @@ private data class ProcessResult(
 private data class NormalizedTranscript(
     val text: String,
     val hasSpeakerLabels: Boolean,
+    val utterances: List<TranscriptUtterance> = emptyList(),
+)
+
+private sealed interface TranscriptionExecutionResult {
+    data class Success(val transcript: NormalizedTranscript) : TranscriptionExecutionResult
+    data class Failure(val message: String) : TranscriptionExecutionResult
+    data object Cancelled : TranscriptionExecutionResult
+}
+
+@Serializable
+private data class WhisperTranscriptionPayload(
+    val transcription: List<WhisperTranscriptionSegment> = emptyList(),
+)
+
+@Serializable
+private data class WhisperTranscriptionSegment(
+    val text: String = "",
+    val speaker: String? = null,
+    val offsets: WhisperSegmentOffsets? = null,
+    @SerialName("speaker_turn_next")
+    val speakerTurnNext: Boolean = false,
+)
+
+@Serializable
+private data class WhisperSegmentOffsets(
+    val from: Long = 0,
+    val to: Long = 0,
+)
+
+private data class TranscriptSpan(
+    val startMs: Long,
+    val endMs: Long,
+    val speaker: String,
+    val text: String,
+)
+
+private data class PendingTranscriptSpan(
+    val startMs: Long,
+    val endMs: Long,
+    val speaker: String?,
+    val text: String,
+)
+
+private data class TranscriptUtterance(
+    val startMs: Long,
+    val endMs: Long,
+    val speaker: String,
+    val text: String,
+)
+
+private data class WaveMetadata(
+    val audioFormat: Int,
+    val channelCount: Int,
+    val sampleRate: Int,
+    val blockAlign: Int,
+    val bitsPerSample: Int,
+    val dataOffset: Long,
+    val dataSize: Long,
+)
+
+private data class StereoSplitFiles(
+    val left: File,
+    val right: File,
 )
 
 private enum class JobStatus(val serializedName: String) {

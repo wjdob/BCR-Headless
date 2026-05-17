@@ -1,8 +1,7 @@
-BCR Headless 1.1.0-test.6
+BCR Headless 1.1.0-test.7
 
-- Switched component preparation downloads from shell curl/wget to the Android helper HTTP stack
-- Added clearer HTTP/TLS/redirect failure reporting for whisper.cpp and model downloads
-- Kept ABI manifest selection and local whisper package import while removing shell unzip/curl dependency from prep
+- Fixed stereo call transcript diarization by splitting true stereo WAV recordings into left/right mono passes and merging them by timestamp
+- Kept unsupported stereo formats on a whisper.cpp `-di` fallback path with shorter segment targets
 - Preserved the side-by-side test package line for parallel validation on-device
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.6/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.7/CHANGELOG.md

@@ -9,6 +9,9 @@
 
 ### Unreleased
 
+* Split stereo WAV transcription into channel-specific mono passes and merge them by timestamp for more reliable `Speaker A` / `Speaker B` labeling
+* Keep unsupported stereo formats on a whisper.cpp stereo diarization fallback path
+
 ### Version 1.0.0
 
 This is the first standalone BCR Headless release.
