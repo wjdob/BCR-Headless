@@ -29,7 +29,7 @@ object HeadlessTranscriber {
 
     fun run(args: Array<String>) {
         require(args.isNotEmpty()) {
-            "Usage: transcriber [status|list|enqueue|worker|control|open-transcript] ..."
+            "Usage: transcriber [status|list|enqueue|worker|control|prepare-components|open-transcript] ..."
         }
 
         when (args[0]) {
@@ -38,6 +38,7 @@ object HeadlessTranscriber {
             "enqueue" -> runEnqueue(args)
             "worker" -> runWorker(args)
             "control" -> runControl(args)
+            "prepare-components" -> HeadlessTranscriberComponents.runPrepare(args)
             "open-transcript" -> runOpenTranscript(args)
             else -> throw IllegalArgumentException("Unknown transcriber subcommand: ${args[0]}")
         }

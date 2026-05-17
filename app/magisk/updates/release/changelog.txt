@@ -1,9 +1,8 @@
-BCR Headless 1.1.0-test.5
+BCR Headless 1.1.0-test.6
 
-- Fixed component preparation so ABI auto-select no longer presents a misleading "No URL configured" state
-- Added stronger downloader/extractor fallbacks and clearer component failure messages
-- Replaced the whisper.cpp CLI URL override UI with local package import and clearing controls
-- Removed automatic transcriber debug polling that could freeze KSUWebUI during refresh and scroll
-- Kept the build as a temporary side-by-side test package for parallel validation
+- Switched component preparation downloads from shell curl/wget to the Android helper HTTP stack
+- Added clearer HTTP/TLS/redirect failure reporting for whisper.cpp and model downloads
+- Kept ABI manifest selection and local whisper package import while removing shell unzip/curl dependency from prep
+- Preserved the side-by-side test package line for parallel validation on-device
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.5/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.6/CHANGELOG.md

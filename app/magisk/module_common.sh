@@ -1077,54 +1077,33 @@ install_transcriber_dependencies_foreground() {
     ensure_dirs
     ensure_defaults
     component_status_reset
-    component_status_set transcriber.components.state running
-    component_status_set transcriber.components.running 1
-    component_status_set transcriber.components.error ""
-    component_status_set transcriber.components.started_at "$(component_timestamp)"
-    component_status_set transcriber.components.completed_at ""
-    component_status_set transcriber.components.log "${transcriber_log}"
-    echo "[transcriber-components] prepare started at $(component_timestamp)"
-
     whisper_path=$(config_get_or_default transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli")
+    whisper_manifest_url=$(config_get_or_default transcriber.whisper_manifest_url "${default_whisper_manifest_url}")
+    whisper_url=$(config_get_or_default transcriber.whisper_url "${default_whisper_url}")
+    whisper_local_path=$(config_get_or_default transcriber.whisper_local_path "")
     model_path=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
-    tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
     model_url=$(config_get_or_default transcriber.model_url "${default_model_url}")
+    tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
     tdrz_model_url=$(config_get_or_default transcriber.tinydiarize_model_url "${default_tinydiarize_model_url}")
 
-    failed=0
-    failed_names=""
-
-    if resolve_whisper_cli_component; then
-        if ! download_component whisper_cli "${resolved_whisper_local_path:-${resolved_whisper_url}}" "${resolved_whisper_source_kind:-manifest}" "${whisper_path}" "${resolved_whisper_size}" whisper_cli "${resolved_whisper_sha256}"; then
-            failed=1
-            failed_names="${failed_names} whisper.cpp-cli"
-        fi
-    else
-        failed=1
-        failed_names="${failed_names} whisper.cpp-cli"
-    fi
-    if ! download_component base_model "${model_url}" url "${model_path}" "${default_model_size}" direct ""; then
-        failed=1
-        failed_names="${failed_names} base-model"
-    fi
-    if ! download_component tinydiarize_model "${tdrz_model_url}" url "${tdrz_model_path}" "${default_tinydiarize_model_size}" direct ""; then
-        failed=1
-        failed_names="${failed_names} tinydiarize-model"
-    fi
-
-    if [ "${failed}" -ne 0 ]; then
+    if ! run_helper_foreground \
+        transcriber prepare-components \
+        "${mod_dir}" \
+        "${whisper_path}" \
+        "${whisper_manifest_url}" \
+        "${whisper_url}" \
+        "${whisper_local_path}" \
+        "${model_path}" \
+        "${model_url}" \
+        "${tdrz_model_path}" \
+        "${tdrz_model_url}"; then
         component_status_set transcriber.components.state failed
-        component_status_set transcriber.components.error "Failed:${failed_names}"
+        if [ -z "$(grep '^transcriber.components.error=' "${transcriber_components_file}" 2>/dev/null || true)" ]; then
+            component_status_set transcriber.components.error "Failed: helper prepare-components crashed"
+        fi
         component_status_set transcriber.components.running 0
         component_status_set transcriber.components.completed_at "$(component_timestamp)"
-        echo "[transcriber-components] prepare failed:${failed_names}"
         return 1
-    else
-        component_status_set transcriber.components.state ready
-        component_status_set transcriber.components.error ""
-        component_status_set transcriber.components.running 0
-        component_status_set transcriber.components.completed_at "$(component_timestamp)"
-        echo "[transcriber-components] prepare completed"
     fi
 }
 
