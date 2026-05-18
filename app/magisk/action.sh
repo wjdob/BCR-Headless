@@ -127,6 +127,9 @@ case "${command}" in
             stop)
                 run_helper_foreground transcriber control "${mod_dir}" stop
                 ;;
+            defer)
+                run_helper_foreground transcriber control "${mod_dir}" defer
+                ;;
             clear)
                 run_helper_foreground transcriber control "${mod_dir}" clear
                 ;;
@@ -213,7 +216,7 @@ case "${command}" in
                 tail -n 200 "${transcriber_log}" 2>/dev/null || true
                 ;;
             *)
-                echo "Usage: $0 transcriber [status|list|enqueue|pause|resume|stop|clear|remove|start-worker|install-deps|components-status|components-refresh-metadata|components-reset|local-whisper|remove-deps|open-transcript|logs]" >&2
+                echo "Usage: $0 transcriber [status|list|enqueue|pause|resume|stop|defer|clear|remove|start-worker|install-deps|components-status|components-refresh-metadata|components-reset|local-whisper|remove-deps|open-transcript|logs]" >&2
                 exit 1
                 ;;
         esac

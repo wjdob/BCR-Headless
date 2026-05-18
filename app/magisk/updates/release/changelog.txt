@@ -1,8 +1,8 @@
-BCR Headless 1.1.0-test.12
+BCR Headless 1.1.0-test.13
 
-- Reworked stereo transcription to use one full-call whisper.cpp decode for the clean timeline plus per-channel reference decodes for speaker ownership
-- Added a sentence-level stereo aligner that matches each sentence against left/right channel transcripts before falling back to speech-overlap heuristics
-- Improved short acknowledgement turn handling for replies such as "Mm-hmm" and the trailing call goodbye so timestamps stay readable
-- Preserved the side-by-side test package line for parallel validation on-device
+- Made stereo call capture the default recorder behavior, while still falling back to mono automatically when the ROM rejects stereo VOICE_CALL input
+- Simplified the transcriber settings with language and model pick lists, optional advanced overrides, and a friendlier local whisper.cpp package override
+- Added automatic queueing for new recordings, plus optional charging-only auto-start with a delay and clean restart-on-power-loss handling for transcript integrity
+- Expanded queue cards to show started/completed timestamps and improved long filename wrapping in the Recordings and Queue views
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.12/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.13/CHANGELOG.md

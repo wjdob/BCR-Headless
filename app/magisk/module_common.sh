@@ -16,6 +16,7 @@ transcriber_runtime_file="${state_dir}/transcriber-runtime.json"
 transcriber_queue_file="${state_dir}/transcriber-queue.json"
 transcriber_log="${state_dir}/transcriber.log"
 transcriber_stop_file="${state_dir}/transcriber.stop"
+transcriber_defer_file="${state_dir}/transcriber.defer"
 transcriber_pause_file="${state_dir}/transcriber.pause"
 transcriber_components_file="${state_dir}/transcriber-components.env"
 transcriber_components_pid_file="${state_dir}/transcriber-components.pid"
@@ -97,7 +98,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -170,8 +171,9 @@ ensure_defaults() {
         # confirm that recording is active.
         config_set notifications.enabled 1
     fi
-    if ! config_get recording.stereo >/dev/null 2>&1; then
-        config_set recording.stereo 0
+    current_recording_stereo=$(config_get_or_default recording.stereo "")
+    if [ -z "${current_recording_stereo}" ] || [ "${current_recording_stereo}" != "1" ]; then
+        config_set recording.stereo 1
     fi
     if ! config_get debug.enabled >/dev/null 2>&1; then
         config_set debug.enabled 0
@@ -191,6 +193,15 @@ ensure_defaults() {
     fi
     if ! config_get transcriber.speaker_self_name >/dev/null 2>&1; then
         config_set transcriber.speaker_self_name "Speaker A"
+    fi
+    if ! config_get transcriber.auto_queue >/dev/null 2>&1; then
+        config_set transcriber.auto_queue 0
+    fi
+    if ! config_get transcriber.auto_queue_require_charging >/dev/null 2>&1; then
+        config_set transcriber.auto_queue_require_charging 0
+    fi
+    if ! config_get transcriber.auto_queue_charge_delay_seconds >/dev/null 2>&1; then
+        config_set transcriber.auto_queue_charge_delay_seconds 30
     fi
     if ! config_get transcriber.whisper_path >/dev/null 2>&1; then
         config_set transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli"
@@ -237,7 +248,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -368,7 +379,7 @@ start_daemon() {
     min_duration=$(config_get_or_default recording.min_duration 0)
     log_enabled=$(bool_string config_is_enabled recording.log_enabled 1)
     notifications_enabled=$(bool_string config_is_enabled notifications.enabled 1)
-    stereo_enabled=$(bool_string config_is_enabled recording.stereo 0)
+    stereo_enabled=$(bool_string config_is_enabled recording.stereo 1)
 
     touch "${daemon_log}"
     printf '\n[%s] daemon start\n' "$(component_timestamp)" >> "${daemon_log}"
@@ -423,7 +434,7 @@ start_transcriber_worker() {
     notifications_enabled=$(bool_string config_is_enabled notifications.enabled 1)
     speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")
 
-    rm -f "${transcriber_stop_file}"
+    rm -f "${transcriber_stop_file}" "${transcriber_defer_file}"
     touch "${transcriber_log}"
     printf '\n[%s] transcriber worker start\n' "$(component_timestamp)" >> "${transcriber_log}"
 
@@ -1172,7 +1183,7 @@ install_transcriber_dependencies() {
 
 remove_transcriber_dependencies() {
     rm -rf "${transcriber_tools_dir}"
-    rm -f "${transcriber_pid_file}" "${transcriber_runtime_file}" "${transcriber_stop_file}" "${transcriber_pause_file}" "${transcriber_components_file}" "${transcriber_components_pid_file}" "${transcriber_whisper_upload_tmp}" "${transcriber_whisper_upload_target_file}"
+    rm -f "${transcriber_pid_file}" "${transcriber_runtime_file}" "${transcriber_stop_file}" "${transcriber_defer_file}" "${transcriber_pause_file}" "${transcriber_components_file}" "${transcriber_components_pid_file}" "${transcriber_whisper_upload_tmp}" "${transcriber_whisper_upload_target_file}"
     rm -rf "${state_dir}/transcriber-work"
 }
 
@@ -1242,7 +1253,7 @@ print_status() {
     echo "output.dir=${status_output_dir}"
     echo "recording.min_duration=$(config_get_or_default recording.min_duration 0)"
     echo "recording.log_enabled=$(bool_string config_is_enabled recording.log_enabled 1)"
-    echo "recording.stereo=$(bool_string config_is_enabled recording.stereo 0)"
+    echo "recording.stereo=$(bool_string config_is_enabled recording.stereo 1)"
     echo "notifications.enabled=$(bool_string config_is_enabled notifications.enabled 1)"
     echo "debug.enabled=$(bool_string config_is_enabled debug.enabled 0)"
     echo "transcriber.enabled=$(bool_string config_is_enabled transcriber.enabled 0)"
@@ -1250,6 +1261,9 @@ print_status() {
     echo "transcriber.language=$(config_get_or_default transcriber.language en)"
     echo "transcriber.output_format=$(config_get_or_default transcriber.output_format txt)"
     echo "transcriber.speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")"
+    echo "transcriber.auto_queue=$(bool_string config_is_enabled transcriber.auto_queue 0)"
+    echo "transcriber.auto_queue_require_charging=$(bool_string config_is_enabled transcriber.auto_queue_require_charging 0)"
+    echo "transcriber.auto_queue_charge_delay_seconds=$(config_get_or_default transcriber.auto_queue_charge_delay_seconds 30)"
     echo "transcriber.whisper_path=${status_whisper_path}"
     echo "transcriber.model_path=${status_model_path}"
     echo "transcriber.tinydiarize_model_path=${status_tdrz_model_path}"

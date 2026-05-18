@@ -89,7 +89,7 @@ val gitVersionTriple = describeVersion(git)
 val projectVersionMajor = 1
 val projectVersionMinor = 1
 val projectVersionPatch = 0
-val projectVersionSuffix = "test.12"
+val projectVersionSuffix = "test.13"
 val gitVersionCode = getVersionCode(
     projectVersionMajor,
     projectVersionMinor,

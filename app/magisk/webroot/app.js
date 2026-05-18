@@ -1,6 +1,7 @@
 import { exec, moduleInfo, toast } from "./kernelsu.js";
 
 const DEFAULT_MODULE_ID = "bcr.headless.test";
+const DEFAULT_WHISPER_MANIFEST_URL = "https://github.com/wjdob/BCR-Headless-Test/releases/download/transcriber-tools/transcriber-tools.env";
 
 function resolveModuleContext() {
     try {
@@ -33,7 +34,6 @@ const lastOutput = document.querySelector("#last-output");
 const lastOutputTile = document.querySelector("#last-output-tile");
 const recordingEnabled = document.querySelector("#recording-enabled");
 const recordingLogEnabled = document.querySelector("#recording-log-enabled");
-const recordingStereoEnabled = document.querySelector("#recording-stereo-enabled");
 const outputDir = document.querySelector("#output-dir");
 const minDuration = document.querySelector("#min-duration");
 
@@ -62,12 +62,24 @@ const transcriberOutputDir = document.querySelector("#transcriber-output-dir");
 const transcriberLanguage = document.querySelector("#transcriber-language");
 const transcriberSpeakerSelfName = document.querySelector("#transcriber-speaker-self-name");
 const transcriberOutputFormat = document.querySelector("#transcriber-output-format");
-const transcriberWhisperManifestUrl = document.querySelector("#transcriber-whisper-manifest-url");
+const transcriberWhisperLocalEnabled = document.querySelector("#transcriber-whisper-local-enabled");
+const transcriberWhisperLocalField = document.querySelector("#transcriber-whisper-local-field");
 const transcriberWhisperLocalPath = document.querySelector("#transcriber-whisper-local-path");
 const transcriberWhisperLocalStatus = document.querySelector("#transcriber-whisper-local-status");
-const clearTranscriberWhisperPathButton = document.querySelector("#clear-transcriber-whisper-path-button");
+const transcriberModelPreset = document.querySelector("#transcriber-model-preset");
+const transcriberModelUrlEnabled = document.querySelector("#transcriber-model-url-enabled");
+const transcriberModelUrlField = document.querySelector("#transcriber-model-url-field");
 const transcriberModelUrl = document.querySelector("#transcriber-model-url");
+const transcriberTdrzPreset = document.querySelector("#transcriber-tdrz-preset");
+const transcriberTdrzUrlEnabled = document.querySelector("#transcriber-tdrz-url-enabled");
+const transcriberTdrzUrlField = document.querySelector("#transcriber-tdrz-url-field");
 const transcriberTdrzUrl = document.querySelector("#transcriber-tdrz-url");
+const transcriberAutoQueueEnabled = document.querySelector("#transcriber-auto-queue-enabled");
+const transcriberAutoQueueChargingRow = document.querySelector("#transcriber-auto-queue-charging-row");
+const transcriberAutoQueueChargingHelp = document.querySelector("#transcriber-auto-queue-charging-help");
+const transcriberAutoQueueChargingOnly = document.querySelector("#transcriber-auto-queue-charging-only");
+const transcriberAutoQueueDelayField = document.querySelector("#transcriber-auto-queue-delay-field");
+const transcriberAutoQueueDelaySeconds = document.querySelector("#transcriber-auto-queue-delay-seconds");
 const transcriberEngineState = document.querySelector("#transcriber-engine-state");
 const transcriberQueueState = document.querySelector("#transcriber-queue-state");
 const transcriberWhisperPath = document.querySelector("#transcriber-whisper-path");
@@ -214,25 +226,92 @@ function setActiveTab(name) {
     updateDebugControls();
 }
 
+function selectHasValue(select, value) {
+    return Array.from(select?.options || []).some((option) => option.value === value);
+}
+
+function ensureSelectValue(select, value, fallbackLabelPrefix = "Saved") {
+    if (!select) {
+        return;
+    }
+
+    if (selectHasValue(select, value)) {
+        select.value = value;
+        return;
+    }
+
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = `${fallbackLabelPrefix}: ${value}`;
+    select.appendChild(option);
+    select.value = value;
+}
+
+function syncTranscriberAdvancedFields() {
+    if (transcriberWhisperLocalField) {
+        transcriberWhisperLocalField.hidden = !transcriberWhisperLocalEnabled?.checked;
+    }
+    if (transcriberModelUrlField) {
+        transcriberModelUrlField.hidden = !transcriberModelUrlEnabled?.checked;
+    }
+    if (transcriberTdrzUrlField) {
+        transcriberTdrzUrlField.hidden = !transcriberTdrzUrlEnabled?.checked;
+    }
+
+    const autoQueueEnabled = !!transcriberAutoQueueEnabled?.checked;
+    if (transcriberAutoQueueChargingRow) {
+        transcriberAutoQueueChargingRow.hidden = !autoQueueEnabled;
+    }
+    if (transcriberAutoQueueChargingHelp) {
+        transcriberAutoQueueChargingHelp.hidden = !autoQueueEnabled;
+    }
+    if (transcriberAutoQueueDelayField) {
+        transcriberAutoQueueDelayField.hidden = !autoQueueEnabled || !transcriberAutoQueueChargingOnly?.checked;
+    }
+}
+
 function updateUiFromStatus(values) {
     latestStatus = values;
     const enabled = values["recording.enabled"] === "1";
 
     recordingEnabled.checked = enabled;
     recordingLogEnabled.checked = values["recording.log_enabled"] !== "0";
-    recordingStereoEnabled.checked = values["recording.stereo"] === "1";
     debugEnabled.checked = values["debug.enabled"] === "1";
     outputDir.value = values["output.dir"] || "/sdcard/Recordings/BCR";
     minDuration.value = values["recording.min_duration"] || "0";
     transcriberEnabled.checked = values["transcriber.enabled"] === "1";
     transcriberOutputDir.value = values["transcriber.output_dir"] || `${outputDir.value || "/sdcard/Recordings/BCR"}/transcripts`;
-    transcriberLanguage.value = values["transcriber.language"] || "en";
+    ensureSelectValue(transcriberLanguage, values["transcriber.language"] || "en", "Saved language");
     transcriberSpeakerSelfName.value = values["transcriber.speaker_self_name"] || "Speaker A";
     transcriberOutputFormat.value = values["transcriber.output_format"] || "txt";
-    transcriberWhisperManifestUrl.value = values["transcriber.whisper_manifest_url"] || "";
-    transcriberWhisperLocalPath.value = values["transcriber.whisper_local_path"] || "";
-    transcriberModelUrl.value = values["transcriber.model_url"] || "";
-    transcriberTdrzUrl.value = values["transcriber.tinydiarize_model_url"] || "";
+    const whisperLocalPath = values["transcriber.whisper_local_path"] || "";
+    transcriberWhisperLocalEnabled.checked = whisperLocalPath !== "";
+    transcriberWhisperLocalPath.value = whisperLocalPath;
+
+    const modelUrl = values["transcriber.model_url"] || "";
+    if (selectHasValue(transcriberModelPreset, modelUrl)) {
+        transcriberModelPreset.value = modelUrl;
+        transcriberModelUrlEnabled.checked = false;
+        transcriberModelUrl.value = "";
+    } else {
+        transcriberModelUrlEnabled.checked = true;
+        transcriberModelUrl.value = modelUrl;
+    }
+
+    const tdrzUrl = values["transcriber.tinydiarize_model_url"] || "";
+    if (selectHasValue(transcriberTdrzPreset, tdrzUrl)) {
+        transcriberTdrzPreset.value = tdrzUrl;
+        transcriberTdrzUrlEnabled.checked = false;
+        transcriberTdrzUrl.value = "";
+    } else {
+        transcriberTdrzUrlEnabled.checked = true;
+        transcriberTdrzUrl.value = tdrzUrl;
+    }
+
+    transcriberAutoQueueEnabled.checked = values["transcriber.auto_queue"] === "1";
+    transcriberAutoQueueChargingOnly.checked = values["transcriber.auto_queue_require_charging"] === "1";
+    transcriberAutoQueueDelaySeconds.value = values["transcriber.auto_queue_charge_delay_seconds"] || "30";
+    syncTranscriberAdvancedFields();
     updateTranscriberWhisperLocalStatus(values, latestComponentsStatus);
 
     const running = values["daemon.running"] === "1";
@@ -413,7 +492,6 @@ async function openLastOutputTarget() {
 async function saveConfigAndRestart() {
     const enabled = recordingEnabled.checked ? "1" : "0";
     const logEnabled = recordingLogEnabled.checked ? "1" : "0";
-    const stereoEnabled = recordingStereoEnabled.checked ? "1" : "0";
     const output = outputDir.value.trim() || "/sdcard/Recordings/BCR";
     const duration = String(Math.max(0, Number.parseInt(minDuration.value || "0", 10) || 0));
 
@@ -421,7 +499,7 @@ async function saveConfigAndRestart() {
         [
             `sh ./action.sh config set recording.enabled ${enabled}`,
             `sh ./action.sh config set recording.log_enabled ${logEnabled}`,
-            `sh ./action.sh config set recording.stereo ${stereoEnabled}`,
+            "sh ./action.sh config set recording.stereo 1",
             `sh ./action.sh config set output.dir ${shellQuote(output)}`,
             `sh ./action.sh config set recording.min_duration ${duration}`,
             "sh ./action.sh restart",
@@ -641,9 +719,15 @@ function updateTranscriberWhisperLocalStatus(values = latestStatus, components =
 
     const typedPath = transcriberWhisperLocalPath?.value.trim() || "";
     const savedPath = values["transcriber.whisper_local_path"] || components["component.whisper_cli.local_path"] || "";
+    if (!transcriberWhisperLocalEnabled?.checked && !savedPath) {
+        transcriberWhisperLocalStatus.textContent =
+            "Optional. Leave this off to use the automatic device-matched whisper.cpp CLI download.";
+        return;
+    }
+
     if (typedPath && typedPath !== savedPath) {
         transcriberWhisperLocalStatus.textContent =
-            `${typedPath} • manual path typed • save transcriber settings to apply`;
+            `${typedPath} • save transcriber settings to use this package`;
         return;
     }
 
@@ -654,7 +738,7 @@ function updateTranscriberWhisperLocalStatus(values = latestStatus, components =
 
     if (!localPath) {
         transcriberWhisperLocalStatus.textContent =
-            "No manual local package path configured. Enter an absolute binary or zip path if ABI auto-selection is not desired.";
+            "Optional. Enter a full path if you want to use your own compiled whisper.cpp CLI package.";
         return;
     }
 
@@ -751,6 +835,8 @@ function renderTranscriberQueue(jobs) {
         details.className = "entry-details";
         details.innerHTML = `
             <div><span class="label">Progress</span><strong>${Number(job.progress || 0)}%</strong></div>
+            <div><span class="label">Started</span><strong>${job.startedAt ? formatTimestamp(job.startedAt) : "Not started yet"}</strong></div>
+            <div><span class="label">Completed</span><strong>${job.completedAt ? formatTimestamp(job.completedAt) : "Not finished yet"}</strong></div>
             <div><span class="label">Transcript</span><strong>${job.transcriptPath || "Not written"}</strong></div>
             <div><span class="label">Error</span><strong>${job.error || "None"}</strong></div>
         `;
@@ -793,13 +879,32 @@ async function saveTranscriberConfig() {
     const wasEnabled = latestStatus["transcriber.enabled"] === "1";
     const willEnable = transcriberEnabled.checked;
     const output = transcriberOutputDir.value.trim() || `${outputDir.value.trim() || "/sdcard/Recordings/BCR"}/transcripts`;
-    const language = transcriberLanguage.value.trim() || "en";
+    const language = transcriberLanguage.value || "en";
     const speakerSelfName = transcriberSpeakerSelfName.value.trim() || "Speaker A";
     const format = transcriberOutputFormat.value || "txt";
-    const whisperManifestUrl = transcriberWhisperManifestUrl.value.trim();
-    const whisperLocalPath = transcriberWhisperLocalPath.value.trim();
-    const modelUrl = transcriberModelUrl.value.trim();
-    const tdrzUrl = transcriberTdrzUrl.value.trim();
+    const whisperManifestUrl = latestStatus["transcriber.whisper_manifest_url"] || DEFAULT_WHISPER_MANIFEST_URL;
+    const whisperLocalPath = transcriberWhisperLocalEnabled.checked
+        ? transcriberWhisperLocalPath.value.trim()
+        : "";
+    const modelUrl = transcriberModelUrlEnabled.checked
+        ? transcriberModelUrl.value.trim()
+        : (transcriberModelPreset.value || "");
+    const tdrzUrl = transcriberTdrzUrlEnabled.checked
+        ? transcriberTdrzUrl.value.trim()
+        : (transcriberTdrzPreset.value || "");
+    const autoQueue = transcriberAutoQueueEnabled.checked ? "1" : "0";
+    const autoQueueRequireCharging = (transcriberAutoQueueEnabled.checked && transcriberAutoQueueChargingOnly.checked) ? "1" : "0";
+    const autoQueueChargeDelaySeconds = String(Math.max(0, Number.parseInt(transcriberAutoQueueDelaySeconds.value || "30", 10) || 0));
+
+    if (transcriberWhisperLocalEnabled.checked && !whisperLocalPath) {
+        throw new Error("Enter a local whisper.cpp CLI package path or turn off the local package override.");
+    }
+    if (transcriberModelUrlEnabled.checked && !modelUrl) {
+        throw new Error("Enter a custom Whisper model URL or turn off the custom Whisper model override.");
+    }
+    if (transcriberTdrzUrlEnabled.checked && !tdrzUrl) {
+        throw new Error("Enter a custom TinyDiarize model URL or turn off the custom TinyDiarize override.");
+    }
 
     if (!wasEnabled && willEnable) {
         const confirmed = await requestChoice({
@@ -842,6 +947,9 @@ async function saveTranscriberConfig() {
             `sh ./action.sh config set transcriber.language ${shellQuote(language)}`,
             `sh ./action.sh config set transcriber.speaker_self_name ${shellQuote(speakerSelfName)}`,
             `sh ./action.sh config set transcriber.output_format ${shellQuote(format)}`,
+            `sh ./action.sh config set transcriber.auto_queue ${autoQueue}`,
+            `sh ./action.sh config set transcriber.auto_queue_require_charging ${autoQueueRequireCharging}`,
+            `sh ./action.sh config set transcriber.auto_queue_charge_delay_seconds ${autoQueueChargeDelaySeconds}`,
             `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(whisperManifestUrl)}`,
             `sh ./action.sh config set transcriber.whisper_url ''`,
             `sh ./action.sh config set transcriber.whisper_local_path ${shellQuote(whisperLocalPath)}`,
@@ -857,21 +965,6 @@ async function saveTranscriberConfig() {
 
     toast("Transcriber settings saved");
     await refreshTranscriberAll();
-}
-
-async function clearLocalWhisperPath() {
-    if (transcriberWhisperLocalPath) {
-        transcriberWhisperLocalPath.value = "";
-    }
-    await run(
-        [
-            `sh ./action.sh config set transcriber.whisper_local_path ''`,
-            `sh ./action.sh transcriber components-reset`,
-        ].join(" && "),
-    );
-    toast("Local whisper package path cleared");
-    await refreshStatus();
-    await refreshTranscriberComponentsStatus();
 }
 
 async function queueSelectedRecordings() {
@@ -987,6 +1080,8 @@ function renderJobsDebug(status) {
             job.id || "unknown-id",
             job.status || "unknown",
             `${job.progress ?? 0}%`,
+            job.startedAt ? `started=${job.startedAt}` : "",
+            job.completedAt ? `completed=${job.completedAt}` : "",
             job.error ? `error=${job.error}` : "",
             job.recordingPath || job.inputPath || "",
             job.transcriptPath || job.outputPath || "",
@@ -1430,16 +1525,21 @@ document.querySelector("#save-transcriber-button").addEventListener("click", asy
 transcriberWhisperLocalPath?.addEventListener("input", () => {
     updateTranscriberWhisperLocalStatus();
 });
-
-clearTranscriberWhisperPathButton?.addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await clearLocalWhisperPath();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
+transcriberWhisperLocalEnabled?.addEventListener("change", () => {
+    syncTranscriberAdvancedFields();
+    updateTranscriberWhisperLocalStatus();
+});
+transcriberModelUrlEnabled?.addEventListener("change", () => {
+    syncTranscriberAdvancedFields();
+});
+transcriberTdrzUrlEnabled?.addEventListener("change", () => {
+    syncTranscriberAdvancedFields();
+});
+transcriberAutoQueueEnabled?.addEventListener("change", () => {
+    syncTranscriberAdvancedFields();
+});
+transcriberAutoQueueChargingOnly?.addEventListener("change", () => {
+    syncTranscriberAdvancedFields();
 });
 
 document.querySelector("#install-transcriber-deps-button").addEventListener("click", async () => {
@@ -1455,9 +1555,15 @@ document.querySelector("#install-transcriber-deps-button").addEventListener("cli
         latestStatus["transcriber.components.estimated_bytes"] ||
         0,
     );
+    const whisperModelLabel = transcriberModelUrlEnabled.checked
+        ? "your custom Whisper model"
+        : (transcriberModelPreset.selectedOptions[0]?.textContent || "the selected Whisper model");
+    const tdrzModelLabel = transcriberTdrzUrlEnabled.checked
+        ? "your custom TinyDiarize model"
+        : (transcriberTdrzPreset.selectedOptions[0]?.textContent || "the selected TinyDiarize model");
     const choice = await requestChoice({
         title: "Prepare Components",
-        message: `This downloads an ABI-matched whisper.cpp CLI package, Whisper base English model, and TinyDiarize speaker model into the module. Estimated additional storage: ${formatBytes(estimatedBytes)}.`,
+        message: `This downloads an ABI-matched whisper.cpp CLI package, ${whisperModelLabel}, and ${tdrzModelLabel} into the module. Estimated additional storage: ${formatBytes(estimatedBytes)}.`,
         actions: [
             { label: "Prepare", value: "prepare", className: "" },
             { label: "Cancel", value: "cancel", className: "ghost" },
@@ -1705,6 +1811,7 @@ document.querySelector("#logs-button").addEventListener("click", async () => {
     }
 });
 
+syncTranscriberAdvancedFields();
 setActiveTab("recorder");
 setBusy(true);
 refreshAll()
