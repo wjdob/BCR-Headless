@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - main
+      - test
     paths:
       - '.github/workflows/transcriber-tools.yml'
       - 'scripts/build-whisper-android.sh'
@@ -93,7 +94,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish release assets
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish) || (github.event_name == 'push' && github.ref_name == 'main') }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
