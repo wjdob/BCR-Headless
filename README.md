@@ -4,7 +4,7 @@
 
 > Test build: this branch/package is temporarily labeled as
 > `BCR Headless Test` with module id `bcr.headless.test` and version
-> `1.1.0-test.13` so it can be installed beside the original `1.0.0`
+> `1.1.0-test.14` so it can be installed beside the original `1.0.0`
 > `bcr.headless` release.
 
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
@@ -47,7 +47,7 @@ This design exists to reduce the user-space surface that security-sensitive apps
 * Open individual recordings from the recorded-calls view
 * Experimental offline transcription queue with speaker-labeled transcripts
 * In-place updates preserve module config, recording history, queued transcriber state, and downloaded transcriber components
-* Optional experimental stereo uplink/downlink WAV capture for future diarization
+* Stereo VOICE_CALL capture by default when supported, with manual mono fallback override in the WebUI
 * ABI-aware transcriber component preparation for Android `whisper-cli`
 * Separate debug view for runtime status, probe output, and logs
 * Recording files saved directly to a plain filesystem path
@@ -194,7 +194,7 @@ and runs a lightweight executable check before marking the component ready.
 This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
 
 * `1.x` for the standalone headless rebuild line
-* `1.1.0-test.13` for this temporary parallel-install test build
+* `1.1.0-test.14` for this temporary parallel-install test build
 * plain semantic version names such as `1.0.0` for stable releases
 
 ## Building

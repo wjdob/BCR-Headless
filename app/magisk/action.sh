@@ -147,7 +147,8 @@ case "${command}" in
                 start_transcriber_worker
                 ;;
             install-deps)
-                install_transcriber_dependencies
+                prepare_profile="${3:-stereo}"
+                install_transcriber_dependencies "${prepare_profile}"
                 ;;
             components-status)
                 print_transcriber_components_status

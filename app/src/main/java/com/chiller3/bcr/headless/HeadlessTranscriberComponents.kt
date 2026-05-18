@@ -25,10 +25,12 @@ object HeadlessTranscriberComponents {
     private const val COPY_BUFFER_SIZE = 64 * 1024
     private const val PROGRESS_UPDATE_BYTES = 512 * 1024L
     private const val HELPER_USER_AGENT = "BCR-Headless-Test/1.1"
+    private const val PREPARE_PROFILE_STEREO = "stereo"
+    private const val PREPARE_PROFILE_MONO = "mono"
 
     fun runPrepare(args: Array<String>) {
-        require(args.size >= 10) {
-            "Usage: transcriber prepare-components <module_dir> <whisper_path> <whisper_manifest_url> <whisper_url> <whisper_local_path> <model_path> <model_url> <tinydiarize_model_path> <tinydiarize_model_url>"
+        require(args.size >= 11) {
+            "Usage: transcriber prepare-components <module_dir> <whisper_path> <whisper_manifest_url> <whisper_url> <whisper_local_path> <model_path> <model_url> <tinydiarize_model_path> <tinydiarize_model_url> <prepare_profile>"
         }
 
         val moduleDir = File(args[1])
@@ -40,6 +42,11 @@ object HeadlessTranscriberComponents {
         val modelUrl = args[7].trim()
         val tinydiarizeModelPath = File(args[8])
         val tinydiarizeModelUrl = args[9].trim()
+        val prepareProfile = if (args[10].trim().lowercase(Locale.ROOT) == PREPARE_PROFILE_MONO) {
+            PREPARE_PROFILE_MONO
+        } else {
+            PREPARE_PROFILE_STEREO
+        }
         val installer = ComponentInstaller(
             state = ComponentInstallerState(moduleDir),
             whisperPath = whisperPath,
@@ -50,6 +57,7 @@ object HeadlessTranscriberComponents {
             modelUrl = modelUrl,
             tinydiarizeModelPath = tinydiarizeModelPath,
             tinydiarizeModelUrl = tinydiarizeModelUrl,
+            prepareProfile = prepareProfile,
         )
 
         installer.run()
@@ -94,6 +102,7 @@ object HeadlessTranscriberComponents {
         private val modelUrl: String,
         private val tinydiarizeModelPath: File,
         private val tinydiarizeModelUrl: String,
+        private val prepareProfile: String = PREPARE_PROFILE_STEREO,
     ) {
         private val status = ComponentStatusStore(state.componentsFile)
         private val logger = ComponentLogger()
@@ -103,6 +112,8 @@ object HeadlessTranscriberComponents {
             markPrepareStarted()
 
             val failures = mutableListOf<String>()
+            val installStereo = prepareProfile != PREPARE_PROFILE_MONO
+            val installMonoFallback = prepareProfile == PREPARE_PROFILE_MONO
 
             try {
                 installWhisperCli()
@@ -115,42 +126,50 @@ object HeadlessTranscriberComponents {
                 failures += "whisper.cpp-cli"
             }
 
-            try {
-                installRemoteFile(
-                    componentKey = "base_model",
-                    label = "base_model",
-                    sourceUrl = modelUrl,
-                    destination = modelPath,
-                    sourceKind = "url",
-                    sourceDetail = modelUrl,
-                    extractor = null,
-                )
-            } catch (e: Exception) {
-                val message = e.localizedMessage ?: e.javaClass.simpleName
-                logger.log("base_model failed: $message")
-                status.set("component.base_model.status", "failed")
-                status.set("component.base_model.progress", "0")
-                status.set("component.base_model.error", message)
-                failures += "base-model"
+            if (installStereo) {
+                try {
+                    installRemoteFile(
+                        componentKey = "base_model",
+                        label = "base_model",
+                        sourceUrl = modelUrl,
+                        destination = modelPath,
+                        sourceKind = "url",
+                        sourceDetail = modelUrl,
+                        extractor = null,
+                    )
+                } catch (e: Exception) {
+                    val message = e.localizedMessage ?: e.javaClass.simpleName
+                    logger.log("base_model failed: $message")
+                    status.set("component.base_model.status", "failed")
+                    status.set("component.base_model.progress", "0")
+                    status.set("component.base_model.error", message)
+                    failures += "base-model"
+                }
+            } else {
+                markDeferred("base_model", "Not downloaded for mono fallback preparation")
             }
 
-            try {
-                installRemoteFile(
-                    componentKey = "tinydiarize_model",
-                    label = "tinydiarize_model",
-                    sourceUrl = tinydiarizeModelUrl,
-                    destination = tinydiarizeModelPath,
-                    sourceKind = "url",
-                    sourceDetail = tinydiarizeModelUrl,
-                    extractor = null,
-                )
-            } catch (e: Exception) {
-                val message = e.localizedMessage ?: e.javaClass.simpleName
-                logger.log("tinydiarize_model failed: $message")
-                status.set("component.tinydiarize_model.status", "failed")
-                status.set("component.tinydiarize_model.progress", "0")
-                status.set("component.tinydiarize_model.error", message)
-                failures += "tinydiarize-model"
+            if (installMonoFallback) {
+                try {
+                    installRemoteFile(
+                        componentKey = "tinydiarize_model",
+                        label = "tinydiarize_model",
+                        sourceUrl = tinydiarizeModelUrl,
+                        destination = tinydiarizeModelPath,
+                        sourceKind = "url",
+                        sourceDetail = tinydiarizeModelUrl,
+                        extractor = null,
+                    )
+                } catch (e: Exception) {
+                    val message = e.localizedMessage ?: e.javaClass.simpleName
+                    logger.log("tinydiarize_model failed: $message")
+                    status.set("component.tinydiarize_model.status", "failed")
+                    status.set("component.tinydiarize_model.progress", "0")
+                    status.set("component.tinydiarize_model.error", message)
+                    failures += "tinydiarize-model"
+                }
+            } else {
+                markDeferred("tinydiarize_model", "Not downloaded for stereo preparation")
             }
 
             if (failures.isEmpty()) {
@@ -175,11 +194,15 @@ object HeadlessTranscriberComponents {
             status.set("transcriber.components.running", "0")
             status.set("transcriber.components.started_at", status.value("transcriber.components.started_at"))
             status.set("transcriber.components.completed_at", status.value("transcriber.components.completed_at"))
+            val currentProfile = if (status.value("transcriber.components.profile") == PREPARE_PROFILE_MONO) {
+                PREPARE_PROFILE_MONO
+            } else {
+                PREPARE_PROFILE_STEREO
+            }
+            status.set("transcriber.components.profile", currentProfile)
 
             val failures = mutableListOf<String>()
-            var totalEstimated = 0L
-
-            totalEstimated += try {
+            val whisperEstimated = try {
                 refreshWhisperMetadata()
             } catch (e: Exception) {
                 val message = e.localizedMessage ?: e.javaClass.simpleName
@@ -188,21 +211,32 @@ object HeadlessTranscriberComponents {
                 failures += "whisper.cpp-cli"
                 0L
             }
-
-            totalEstimated += refreshRemoteMetadata(
+            val baseEstimated = refreshRemoteMetadata(
                 componentKey = "base_model",
                 sourceUrl = modelUrl,
                 destination = modelPath,
                 sourceKind = "url",
                 sourceDetail = modelUrl,
             )
-            totalEstimated += refreshRemoteMetadata(
+            val tinydiarizeEstimated = refreshRemoteMetadata(
                 componentKey = "tinydiarize_model",
                 sourceUrl = tinydiarizeModelUrl,
                 destination = tinydiarizeModelPath,
                 sourceKind = "url",
                 sourceDetail = tinydiarizeModelUrl,
             )
+
+            if (currentProfile == PREPARE_PROFILE_MONO && !modelPath.isFile) {
+                markDeferred("base_model", "Not downloaded for mono fallback preparation")
+            }
+            if (currentProfile != PREPARE_PROFILE_MONO && !tinydiarizeModelPath.isFile) {
+                markDeferred("tinydiarize_model", "Not downloaded for stereo preparation")
+            }
+            val totalEstimated = whisperEstimated + if (currentProfile == PREPARE_PROFILE_MONO) {
+                tinydiarizeEstimated
+            } else {
+                baseEstimated
+            }
 
             status.set("transcriber.components.total_estimated_bytes", totalEstimated.toString())
             if (failures.isNotEmpty() || hasFailedComponent()) {
@@ -230,6 +264,19 @@ object HeadlessTranscriberComponents {
                 ),
             )
             logger.log("prepare started at ${timestamp()}")
+            status.set("transcriber.components.profile", prepareProfile)
+        }
+
+        private fun markDeferred(componentKey: String, note: String) {
+            status.setAll(
+                mapOf(
+                    "component.$componentKey.status" to "optional",
+                    "component.$componentKey.progress" to "0",
+                    "component.$componentKey.bytes_downloaded" to "0",
+                    "component.$componentKey.error" to "",
+                    "component.$componentKey.note" to note,
+                ),
+            )
         }
 
         private fun refreshWhisperMetadata(): Long {
@@ -555,6 +602,7 @@ object HeadlessTranscriberComponents {
                     "component.$componentKey.bytes_downloaded" to (bytesDownloadedOverride ?: destination.length()).toString(),
                     "component.$componentKey.bytes_total" to destination.length().toString(),
                     "component.$componentKey.error" to "",
+                    "component.$componentKey.note" to "",
                 ),
             )
         }

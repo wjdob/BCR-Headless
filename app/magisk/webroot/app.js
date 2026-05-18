@@ -34,6 +34,8 @@ const lastOutput = document.querySelector("#last-output");
 const lastOutputTile = document.querySelector("#last-output-tile");
 const recordingEnabled = document.querySelector("#recording-enabled");
 const recordingLogEnabled = document.querySelector("#recording-log-enabled");
+const recordingMode = document.querySelector("#recording-mode");
+const recordingModeNote = document.querySelector("#recording-mode-note");
 const outputDir = document.querySelector("#output-dir");
 const minDuration = document.querySelector("#min-duration");
 
@@ -118,6 +120,8 @@ let latestRecordingCandidates = [];
 let componentPollTimer = null;
 let componentPollInFlight = false;
 let activeTabName = "recorder";
+const PREPARE_PROFILE_STEREO = "stereo";
+const PREPARE_PROFILE_MONO = "mono";
 
 function shellQuote(value) {
     return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -270,12 +274,61 @@ function syncTranscriberAdvancedFields() {
     }
 }
 
+function getSavedRecorderMode(values = latestStatus) {
+    return values["recording.stereo"] === "0" ? PREPARE_PROFILE_MONO : PREPARE_PROFILE_STEREO;
+}
+
+function getRecorderModeLabel(mode) {
+    return mode === PREPARE_PROFILE_MONO ? "Mono fallback" : "Stereo";
+}
+
+function getProbeStatusSummary(values = latestStatus) {
+    const detectedMode = values["recording.detected_mode"] === PREPARE_PROFILE_MONO
+        ? PREPARE_PROFILE_MONO
+        : PREPARE_PROFILE_STEREO;
+    const supportFlag = values["recording.voice_call_stereo_supported"] === "1";
+    const probeNote = values["recording.voice_call_probe_note"] || "";
+    const summary = supportFlag
+        ? `VOICE_CALL check: stereo available (${getRecorderModeLabel(detectedMode)} detected)`
+        : "VOICE_CALL check: mono fallback only";
+    return probeNote ? `${summary}. ${probeNote}` : summary;
+}
+
+function updateRecordingModeNote(values = latestStatus) {
+    if (!recordingModeNote || !recordingMode) {
+        return;
+    }
+
+    const savedMode = getSavedRecorderMode(values);
+    const pendingOverride = recordingMode.value && recordingMode.value !== savedMode;
+    recordingModeNote.textContent = pendingOverride
+        ? `${getProbeStatusSummary(values)} Save Changes to apply this override.`
+        : getProbeStatusSummary(values);
+}
+
+function getPrepareEstimateBytes(profile, values = latestComponentsStatus) {
+    const whisperBytes = Number(values["component.whisper_cli.bytes_total"] || 0);
+    const modelBytes = Number(values["component.base_model.bytes_total"] || 0);
+    const tdrzBytes = Number(values["component.tinydiarize_model.bytes_total"] || 0);
+    return whisperBytes + (profile === PREPARE_PROFILE_MONO ? tdrzBytes : modelBytes);
+}
+
+function isTranscriberReadyForRecorderMode(status = latestTranscriberStatus, values = latestStatus) {
+    const deps = status?.dependencies || {};
+    return getSavedRecorderMode(values) === PREPARE_PROFILE_MONO
+        ? !!deps.readyForMonoDiarization
+        : !!deps.readyForStereo;
+}
+
 function updateUiFromStatus(values) {
     latestStatus = values;
     const enabled = values["recording.enabled"] === "1";
 
     recordingEnabled.checked = enabled;
     recordingLogEnabled.checked = values["recording.log_enabled"] !== "0";
+    if (recordingMode) {
+        recordingMode.value = getSavedRecorderMode(values);
+    }
     debugEnabled.checked = values["debug.enabled"] === "1";
     outputDir.value = values["output.dir"] || "/sdcard/Recordings/BCR";
     minDuration.value = values["recording.min_duration"] || "0";
@@ -312,6 +365,7 @@ function updateUiFromStatus(values) {
     transcriberAutoQueueChargingOnly.checked = values["transcriber.auto_queue_require_charging"] === "1";
     transcriberAutoQueueDelaySeconds.value = values["transcriber.auto_queue_charge_delay_seconds"] || "30";
     syncTranscriberAdvancedFields();
+    updateRecordingModeNote(values);
     updateTranscriberWhisperLocalStatus(values, latestComponentsStatus);
 
     const running = values["daemon.running"] === "1";
@@ -492,6 +546,7 @@ async function openLastOutputTarget() {
 async function saveConfigAndRestart() {
     const enabled = recordingEnabled.checked ? "1" : "0";
     const logEnabled = recordingLogEnabled.checked ? "1" : "0";
+    const stereoEnabled = recordingMode?.value === PREPARE_PROFILE_MONO ? "0" : "1";
     const output = outputDir.value.trim() || "/sdcard/Recordings/BCR";
     const duration = String(Math.max(0, Number.parseInt(minDuration.value || "0", 10) || 0));
 
@@ -499,7 +554,7 @@ async function saveConfigAndRestart() {
         [
             `sh ./action.sh config set recording.enabled ${enabled}`,
             `sh ./action.sh config set recording.log_enabled ${logEnabled}`,
-            "sh ./action.sh config set recording.stereo 1",
+            `sh ./action.sh config set recording.stereo ${stereoEnabled}`,
             `sh ./action.sh config set output.dir ${shellQuote(output)}`,
             `sh ./action.sh config set recording.min_duration ${duration}`,
             "sh ./action.sh restart",
@@ -599,10 +654,13 @@ function renderTranscriberStatus(status) {
     const done = queue.filter((job) => job.status === "succeeded" || job.status === "skipped").length;
     const failed = queue.filter((job) => job.status === "failed" || job.status === "cancelled").length;
     const enabled = latestStatus["transcriber.enabled"] === "1";
-    const ready = deps.readyForStereo || deps.readyForMonoDiarization;
+    const recorderMode = getSavedRecorderMode(latestStatus);
+    const ready = isTranscriberReadyForRecorderMode(status, latestStatus);
+    const readyLabel = recorderMode === PREPARE_PROFILE_MONO ? "Ready for mono fallback" : "Ready for stereo";
+    const needsLabel = recorderMode === PREPARE_PROFILE_MONO ? "Needs mono fallback components" : "Needs stereo components";
 
     transcriberEngineState.textContent = enabled
-        ? (ready ? "Ready" : "Needs components")
+        ? (ready ? readyLabel : needsLabel)
         : "Disabled";
     transcriberQueueState.textContent = queue.length
         ? `${active.length} active, ${done} done, ${failed} failed`
@@ -667,6 +725,7 @@ function renderComponent(values, key, pathEl, progressEl, statusEl) {
     const downloaded = Number(values[`${prefix}bytes_downloaded`] || 0);
     const total = Number(values[`${prefix}bytes_total`] || 0);
     const error = values[`${prefix}error`] || "";
+    const note = values[`${prefix}note`] || "";
     const path = values[`${prefix}path`] || "Not set";
     const abi = values[`${prefix}abi`] || "";
     const build = values[`${prefix}build`] || "";
@@ -675,18 +734,20 @@ function renderComponent(values, key, pathEl, progressEl, statusEl) {
     const shownProgress = status === "ready" ? 100 : progress;
     const source = formatComponentSource(values, prefix);
     const progressWrap = progressEl?.parentElement;
-    const hideDetails = status === "ready" && !error;
+    const hideDetails = (status === "ready" || status === "optional") && !error;
 
     pathEl.textContent = `${path} (${detail})`;
     progressEl.style.width = `${shownProgress}%`;
     if (progressWrap) {
-        progressWrap.hidden = hideDetails;
+        progressWrap.hidden = hideDetails || status === "optional";
     }
     statusEl.textContent = hideDetails
-        ? "Installed and ready"
+        ? (status === "ready" ? "Installed and ready" : note || "Optional for this preparation mode")
         : error
             ? `${status}: ${error} • ${source}`
-            : `${status} • ${formatBytes(downloaded)} / ${formatBytes(total)} • ${shownProgress}% • ${source}`;
+            : note && status === "optional"
+                ? `${note} • ${source}`
+                : `${status} • ${formatBytes(downloaded)} / ${formatBytes(total)} • ${shownProgress}% • ${source}`;
 }
 
 function formatComponentSource(values, prefix) {
@@ -909,7 +970,7 @@ async function saveTranscriberConfig() {
     if (!wasEnabled && willEnable) {
         const confirmed = await requestChoice({
             title: "Enable Transcriber",
-            message: "This enables offline transcription using a module-local whisper.cpp CLI, Whisper model, and TinyDiarize speaker model. Use Prepare Components to download them before queueing jobs.",
+            message: "This enables offline transcription using a module-local whisper.cpp CLI and offline models. Use Prepare Components to download either the stereo set or the mono fallback set before queueing jobs.",
             actions: [
                 { label: "Enable", value: "enable", className: "" },
                 { label: "Cancel", value: "cancel", className: "ghost" },
@@ -1525,6 +1586,9 @@ document.querySelector("#save-transcriber-button").addEventListener("click", asy
 transcriberWhisperLocalPath?.addEventListener("input", () => {
     updateTranscriberWhisperLocalStatus();
 });
+recordingMode?.addEventListener("change", () => {
+    updateRecordingModeNote(latestStatus);
+});
 transcriberWhisperLocalEnabled?.addEventListener("change", () => {
     syncTranscriberAdvancedFields();
     updateTranscriberWhisperLocalStatus();
@@ -1550,11 +1614,9 @@ document.querySelector("#install-transcriber-deps-button").addEventListener("cli
         return;
     }
 
-    const estimatedBytes = Number(
-        latestComponentsStatus["transcriber.components.total_estimated_bytes"] ||
-        latestStatus["transcriber.components.estimated_bytes"] ||
-        0,
-    );
+    const recorderMode = getSavedRecorderMode(latestStatus);
+    const stereoEstimate = getPrepareEstimateBytes(PREPARE_PROFILE_STEREO, latestComponentsStatus);
+    const monoEstimate = getPrepareEstimateBytes(PREPARE_PROFILE_MONO, latestComponentsStatus);
     const whisperModelLabel = transcriberModelUrlEnabled.checked
         ? "your custom Whisper model"
         : (transcriberModelPreset.selectedOptions[0]?.textContent || "the selected Whisper model");
@@ -1563,19 +1625,26 @@ document.querySelector("#install-transcriber-deps-button").addEventListener("cli
         : (transcriberTdrzPreset.selectedOptions[0]?.textContent || "the selected TinyDiarize model");
     const choice = await requestChoice({
         title: "Prepare Components",
-        message: `This downloads an ABI-matched whisper.cpp CLI package, ${whisperModelLabel}, and ${tdrzModelLabel} into the module. Estimated additional storage: ${formatBytes(estimatedBytes)}.`,
+        message:
+            `Choose which component set to prepare. ` +
+            `Stereo downloads the ABI-matched whisper.cpp CLI package plus ${whisperModelLabel} ` +
+            `(${formatBytes(stereoEstimate)}). ` +
+            `Mono fallback downloads the ABI-matched whisper.cpp CLI package plus ${tdrzModelLabel} ` +
+            `(${formatBytes(monoEstimate)}). ` +
+            `Current recorder mode: ${getRecorderModeLabel(recorderMode)}.`,
         actions: [
-            { label: "Prepare", value: "prepare", className: "" },
+            { label: "Stereo", value: PREPARE_PROFILE_STEREO, className: "" },
+            { label: "Mono fallback", value: PREPARE_PROFILE_MONO, className: "ghost" },
             { label: "Cancel", value: "cancel", className: "ghost" },
         ],
     });
-    if (choice.value !== "prepare") {
+    if (![PREPARE_PROFILE_STEREO, PREPARE_PROFILE_MONO].includes(choice.value)) {
         return;
     }
 
     setBusy(true);
     try {
-        const output = await run("sh ./action.sh transcriber install-deps");
+        const output = await run(`sh ./action.sh transcriber install-deps ${choice.value}`);
         toast(output || "Component download started");
         await refreshTranscriberComponentsStatus();
         updateTranscriberPolling();

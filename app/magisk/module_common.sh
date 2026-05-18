@@ -98,7 +98,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -144,6 +144,50 @@ bool_string() {
 
 # Defaults -------------------------------------------------------------------
 
+status_value_from_blob() {
+    key="${1}"
+    blob="${2}"
+
+    printf '%s\n' "${blob}" | awk -F= -v target="${key}" '$1 == target { print substr($0, length($1) + 2); exit }'
+}
+
+cache_recording_capability_probe() {
+    if [ ! -f "${helper_apk}" ]; then
+        config_set recording.detected_mode stereo
+        config_set recording.voice_call_stereo_supported 1
+        config_set recording.voice_call_probe_status helper_missing
+        config_set recording.voice_call_probe_note "Helper APK missing; assuming stereo until probed later"
+        return
+    fi
+
+    probe_output=$(run_helper_foreground recording-capability 2>/dev/null || true)
+    detected_mode=$(status_value_from_blob recording.detected_mode "${probe_output}")
+    stereo_supported=$(status_value_from_blob recording.voice_call_stereo_supported "${probe_output}")
+    probe_status=$(status_value_from_blob recording.voice_call_probe_status "${probe_output}")
+    probe_note=$(status_value_from_blob recording.voice_call_probe_note "${probe_output}")
+
+    case "${detected_mode}" in
+        stereo|mono)
+            config_set recording.detected_mode "${detected_mode}"
+            ;;
+        *)
+            config_set recording.detected_mode stereo
+            ;;
+    esac
+
+    case "${stereo_supported}" in
+        0|1)
+            config_set recording.voice_call_stereo_supported "${stereo_supported}"
+            ;;
+        *)
+            config_set recording.voice_call_stereo_supported 1
+            ;;
+    esac
+
+    config_set recording.voice_call_probe_status "${probe_status:-assumed_stereo}"
+    config_set recording.voice_call_probe_note "${probe_note:-Stereo VOICE_CALL check unavailable; assuming stereo until overridden}"
+}
+
 ensure_defaults() {
     # Pick conservative defaults that keep the module inert until the user opts
     # in from the WebUI. That avoids starting call-state monitoring immediately
@@ -171,9 +215,16 @@ ensure_defaults() {
         # confirm that recording is active.
         config_set notifications.enabled 1
     fi
-    current_recording_stereo=$(config_get_or_default recording.stereo "")
-    if [ -z "${current_recording_stereo}" ] || [ "${current_recording_stereo}" != "1" ]; then
-        config_set recording.stereo 1
+    if ! config_get recording.detected_mode >/dev/null 2>&1 || ! config_get recording.voice_call_stereo_supported >/dev/null 2>&1 || ! config_get recording.voice_call_probe_note >/dev/null 2>&1; then
+        cache_recording_capability_probe
+    fi
+    if ! config_get recording.stereo >/dev/null 2>&1; then
+        detected_mode=$(config_get_or_default recording.detected_mode stereo)
+        if [ "${detected_mode}" = "mono" ]; then
+            config_set recording.stereo 0
+        else
+            config_set recording.stereo 1
+        fi
     fi
     if ! config_get debug.enabled >/dev/null 2>&1; then
         config_set debug.enabled 0
@@ -248,7 +299,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -724,6 +775,20 @@ component_status_reset() {
     whisper_bytes_total="${default_whisper_size}"
     whisper_initial_status=missing
     whisper_initial_error=""
+    prepare_profile=stereo
+    base_model_initial_status=missing
+    base_model_note=""
+    tdrz_model_initial_status=missing
+    tdrz_model_note=""
+
+    if ! config_is_enabled recording.stereo 1; then
+        prepare_profile=mono
+        base_model_initial_status=optional
+        base_model_note="Not selected for mono fallback preparation"
+    else
+        tdrz_model_initial_status=optional
+        tdrz_model_note="Not selected for stereo preparation"
+    fi
 
     if [ -n "${whisper_local_path}" ]; then
         whisper_source_kind=local
@@ -740,7 +805,11 @@ component_status_reset() {
         whisper_source_detail="${whisper_url}"
     fi
 
-    total_estimated=$((whisper_bytes_total + default_model_size + default_tinydiarize_model_size))
+    if [ "${prepare_profile}" = mono ]; then
+        total_estimated=$((whisper_bytes_total + default_tinydiarize_model_size))
+    else
+        total_estimated=$((whisper_bytes_total + default_model_size))
+    fi
 
     cat > "${transcriber_components_file}" <<EOF
 transcriber.components.state=idle
@@ -749,6 +818,7 @@ transcriber.components.error=
 transcriber.components.log=${transcriber_log}
 transcriber.components.started_at=
 transcriber.components.completed_at=
+transcriber.components.profile=${prepare_profile}
 transcriber.components.total_estimated_bytes=${total_estimated}
 component.whisper_cli.label=whisper.cpp CLI package
 component.whisper_cli.status=missing
@@ -765,19 +835,21 @@ component.whisper_cli.source_detail=${whisper_source_detail}
 component.whisper_cli.sha256=
 component.whisper_cli.error=${whisper_initial_error}
 component.base_model.label=Whisper base English model
-component.base_model.status=missing
+component.base_model.status=${base_model_initial_status}
 component.base_model.progress=0
 component.base_model.bytes_downloaded=0
 component.base_model.bytes_total=${default_model_size}
 component.base_model.path=${model_path}
 component.base_model.url=${model_url}
+component.base_model.note=${base_model_note}
 component.tinydiarize_model.label=TinyDiarize speaker model
-component.tinydiarize_model.status=missing
+component.tinydiarize_model.status=${tdrz_model_initial_status}
 component.tinydiarize_model.progress=0
 component.tinydiarize_model.bytes_downloaded=0
 component.tinydiarize_model.bytes_total=${default_tinydiarize_model_size}
 component.tinydiarize_model.path=${tdrz_model_path}
 component.tinydiarize_model.url=${tdrz_model_url}
+component.tinydiarize_model.note=${tdrz_model_note}
 EOF
 
     if [ "${whisper_initial_status}" != "missing" ]; then
@@ -798,11 +870,13 @@ EOF
         component_status_set component.base_model.status ready
         component_status_set component.base_model.progress 100
         component_status_set component.base_model.bytes_downloaded "$(file_size_bytes "${model_path}")"
+        component_status_set component.base_model.note ""
     fi
     if [ -f "${tdrz_model_path}" ]; then
         component_status_set component.tinydiarize_model.status ready
         component_status_set component.tinydiarize_model.progress 100
         component_status_set component.tinydiarize_model.bytes_downloaded "$(file_size_bytes "${tdrz_model_path}")"
+        component_status_set component.tinydiarize_model.note ""
     fi
 }
 
@@ -1129,7 +1203,9 @@ download_component() {
 install_transcriber_dependencies_foreground() {
     ensure_dirs
     ensure_defaults
+    prepare_profile="${1:-stereo}"
     component_status_reset
+    component_status_set transcriber.components.profile "${prepare_profile}"
     whisper_path=$(config_get_or_default transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli")
     whisper_manifest_url=$(config_get_or_default transcriber.whisper_manifest_url "${default_whisper_manifest_url}")
     whisper_url=$(config_get_or_default transcriber.whisper_url "${default_whisper_url}")
@@ -1149,7 +1225,8 @@ install_transcriber_dependencies_foreground() {
         "${model_path}" \
         "${model_url}" \
         "${tdrz_model_path}" \
-        "${tdrz_model_url}"; then
+        "${tdrz_model_url}" \
+        "${prepare_profile}"; then
         component_status_set transcriber.components.state failed
         if [ -z "$(grep '^transcriber.components.error=' "${transcriber_components_file}" 2>/dev/null || true)" ]; then
             component_status_set transcriber.components.error "Failed: helper prepare-components crashed"
@@ -1163,6 +1240,7 @@ install_transcriber_dependencies_foreground() {
 install_transcriber_dependencies() {
     ensure_dirs
     ensure_defaults
+    prepare_profile="${1:-stereo}"
 
     if [ -f "${transcriber_components_pid_file}" ]; then
         pid=$(cat "${transcriber_components_pid_file}" 2>/dev/null || true)
@@ -1173,9 +1251,10 @@ install_transcriber_dependencies() {
     fi
 
     component_status_reset
+    component_status_set transcriber.components.profile "${prepare_profile}"
     component_status_set transcriber.components.state running
     component_status_set transcriber.components.running 1
-    ( install_transcriber_dependencies_foreground ) >>"${transcriber_log}" 2>&1 &
+    ( install_transcriber_dependencies_foreground "${prepare_profile}" ) >>"${transcriber_log}" 2>&1 &
     echo "${!}" > "${transcriber_components_pid_file}"
     echo "transcriber.components.started=1"
     print_transcriber_components_status
@@ -1254,6 +1333,10 @@ print_status() {
     echo "recording.min_duration=$(config_get_or_default recording.min_duration 0)"
     echo "recording.log_enabled=$(bool_string config_is_enabled recording.log_enabled 1)"
     echo "recording.stereo=$(bool_string config_is_enabled recording.stereo 1)"
+    echo "recording.detected_mode=$(config_get_or_default recording.detected_mode stereo)"
+    echo "recording.voice_call_stereo_supported=$(config_get_or_default recording.voice_call_stereo_supported 1)"
+    echo "recording.voice_call_probe_status=$(config_get_or_default recording.voice_call_probe_status assumed_stereo)"
+    echo "recording.voice_call_probe_note=$(config_get_or_default recording.voice_call_probe_note "Stereo VOICE_CALL check unavailable; assuming stereo until overridden")"
     echo "notifications.enabled=$(bool_string config_is_enabled notifications.enabled 1)"
     echo "debug.enabled=$(bool_string config_is_enabled debug.enabled 0)"
     echo "transcriber.enabled=$(bool_string config_is_enabled transcriber.enabled 0)"
@@ -1279,7 +1362,12 @@ print_status() {
     else
         status_whisper_size="${default_whisper_size}"
     fi
-    echo "transcriber.components.estimated_bytes=$((status_whisper_size + default_model_size + default_tinydiarize_model_size))"
+    if config_is_enabled recording.stereo 1; then
+        status_component_estimate=$((status_whisper_size + default_model_size))
+    else
+        status_component_estimate=$((status_whisper_size + default_tinydiarize_model_size))
+    fi
+    echo "transcriber.components.estimated_bytes=${status_component_estimate}"
     echo "daemon.running=$(bool_string is_daemon_running)"
     echo "daemon.pid=$(cat "${pid_file}" 2>/dev/null || true)"
     clear_stale_transcriber_pid

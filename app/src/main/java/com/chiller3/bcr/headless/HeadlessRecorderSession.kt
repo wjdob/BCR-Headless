@@ -176,47 +176,7 @@ class HeadlessRecorderSession(
 
     @SuppressLint("MissingPermission")
     private fun createAudioRecord(preferStereo: Boolean): RecordingInput {
-        val specs = buildList {
-            if (preferStereo) {
-                add(ChannelSpec(AudioFormat.CHANNEL_IN_STEREO, 2, "stereo"))
-            }
-            add(ChannelSpec(AudioFormat.CHANNEL_IN_MONO, 1, "mono"))
-        }
-
-        var lastError: String? = null
-
-        for (spec in specs) {
-            val minBufferSize = AudioRecord.getMinBufferSize(
-                SAMPLE_RATE.toInt(),
-                spec.channelMask,
-                AudioFormat.ENCODING_PCM_16BIT,
-            )
-            if (minBufferSize < 0) {
-                lastError = "minimum buffer query failed for ${spec.label}: $minBufferSize"
-                println("Skipping ${spec.label} VOICE_CALL input: $lastError")
-                continue
-            }
-
-            val audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_CALL,
-                SAMPLE_RATE.toInt(),
-                spec.channelMask,
-                AudioFormat.ENCODING_PCM_16BIT,
-                minBufferSize * 6,
-            )
-            if (audioRecord.state == AudioRecord.STATE_INITIALIZED) {
-                if (preferStereo && spec.channelCount == 1) {
-                    println("Stereo VOICE_CALL input unavailable; falling back to mono")
-                }
-                return RecordingInput(audioRecord, spec.channelCount, minBufferSize)
-            }
-
-            lastError = "AudioRecord failed to initialize ${spec.label}: state=${audioRecord.state}"
-            audioRecord.release()
-            println("Skipping ${spec.label} VOICE_CALL input: $lastError")
-        }
-
-        throw IllegalStateException(lastError ?: "No VOICE_CALL input format is available")
+        return openVoiceCallInput(preferStereo, logger = ::println)
     }
 
     private fun encodeLoop(
@@ -308,6 +268,77 @@ class HeadlessRecorderSession(
         private const val BYTES_PER_SAMPLE = 2
         private val TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
 
+        @SuppressLint("MissingPermission")
+        fun probeVoiceCallCapability(preferStereo: Boolean = true): VoiceCallCapability {
+            val input = openVoiceCallInput(preferStereo, logger = null)
+            return try {
+                val stereoSupported = input.channelCount >= 2
+                VoiceCallCapability(
+                    stereoSupported = stereoSupported,
+                    detectedMode = if (stereoSupported) "stereo" else "mono",
+                    status = if (stereoSupported) "stereo_available" else "mono_fallback_only",
+                    note = if (stereoSupported) {
+                        "Stereo VOICE_CALL initialization succeeded"
+                    } else {
+                        "Stereo VOICE_CALL initialization was unavailable; mono fallback is recommended"
+                    },
+                )
+            } finally {
+                try {
+                    input.audioRecord.release()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        private fun openVoiceCallInput(
+            preferStereo: Boolean,
+            logger: ((String) -> Unit)?,
+        ): RecordingInput {
+            val specs = buildList {
+                if (preferStereo) {
+                    add(ChannelSpec(AudioFormat.CHANNEL_IN_STEREO, 2, "stereo"))
+                }
+                add(ChannelSpec(AudioFormat.CHANNEL_IN_MONO, 1, "mono"))
+            }
+
+            var lastError: String? = null
+
+            for (spec in specs) {
+                val minBufferSize = AudioRecord.getMinBufferSize(
+                    SAMPLE_RATE.toInt(),
+                    spec.channelMask,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                )
+                if (minBufferSize < 0) {
+                    lastError = "minimum buffer query failed for ${spec.label}: $minBufferSize"
+                    logger?.invoke("Skipping ${spec.label} VOICE_CALL input: $lastError")
+                    continue
+                }
+
+                val audioRecord = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_CALL,
+                    SAMPLE_RATE.toInt(),
+                    spec.channelMask,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    minBufferSize * 6,
+                )
+                if (audioRecord.state == AudioRecord.STATE_INITIALIZED) {
+                    if (preferStereo && spec.channelCount == 1) {
+                        logger?.invoke("Stereo VOICE_CALL input unavailable; falling back to mono")
+                    }
+                    return RecordingInput(audioRecord, spec.channelCount, minBufferSize)
+                }
+
+                lastError = "AudioRecord failed to initialize ${spec.label}: state=${audioRecord.state}"
+                audioRecord.release()
+                logger?.invoke("Skipping ${spec.label} VOICE_CALL input: $lastError")
+            }
+
+            throw IllegalStateException(lastError ?: "No VOICE_CALL input format is available")
+        }
+
         private fun copyPcm(inputBuffer: ByteBuffer, outputBuffer: ByteBuffer, frameSize: Int) {
             val bytesToCopy = min(inputBuffer.remaining(), outputBuffer.remaining())
             val alignedBytesToCopy = bytesToCopy - (bytesToCopy % frameSize)
@@ -346,5 +377,12 @@ class HeadlessRecorderSession(
         val channelMask: Int,
         val channelCount: Int,
         val label: String,
+    )
+
+    data class VoiceCallCapability(
+        val stereoSupported: Boolean,
+        val detectedMode: String,
+        val status: String,
+        val note: String,
     )
 }

@@ -67,11 +67,20 @@
                     tracks the most recent saved recording.
                 </small>
 
-                <small class="field-help standalone-help">
-                    Call capture now requests stereo by default so the
-                    transcriber can use separate call sides when the ROM allows
-                    it. If stereo VOICE_CALL capture is rejected, recording
-                    automatically falls back to mono.
+                <label class="field">
+                    <span>Recording mode</span>
+                    <select id="recording-mode">
+                        <option value="stereo">Stereo</option>
+                        <option value="mono">Mono fallback</option>
+                    </select>
+                    <small>
+                        Stereo is the default when this device can initialize
+                        VOICE_CALL that way. You can still override it here if
+                        you need the safer mono fallback instead.
+                    </small>
+                </label>
+                <small id="recording-mode-note" class="field-help">
+                    VOICE_CALL capability check has not been loaded yet.
                 </small>
 
                 <label class="field">

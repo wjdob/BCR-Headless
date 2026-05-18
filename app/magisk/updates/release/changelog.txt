@@ -1,8 +1,8 @@
-BCR Headless 1.1.0-test.13
+BCR Headless 1.1.0-test.14
 
-- Made stereo call capture the default recorder behavior, while still falling back to mono automatically when the ROM rejects stereo VOICE_CALL input
-- Simplified the transcriber settings with language and model pick lists, optional advanced overrides, and a friendlier local whisper.cpp package override
-- Added automatic queueing for new recordings, plus optional charging-only auto-start with a delay and clean restart-on-power-loss handling for transcript integrity
-- Expanded queue cards to show started/completed timestamps and improved long filename wrapping in the Recordings and Queue views
+- Added a recorder mode selector so users can explicitly choose Stereo or Mono fallback while still seeing the VOICE_CALL capability probe result
+- Updated Prepare Components to offer Stereo or Mono fallback preparation and download only the component set needed for that path
+- Made transcriber readiness and component estimates follow the active recorder mode so the UI no longer implies the wrong model set is required
+- Marked non-selected transcriber models as optional instead of failed or missing during the opposite preparation path
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.13/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.14/CHANGELOG.md

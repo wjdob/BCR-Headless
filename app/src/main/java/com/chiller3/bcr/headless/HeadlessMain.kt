@@ -29,6 +29,7 @@ object HeadlessMain {
         when (args[0]) {
             "daemon" -> runDaemon(args)
             "probe" -> runProbe(args)
+            "recording-capability" -> runRecordingCapability()
             "open-output-dir" -> runOpenOutputDir(args)
             "open-recording" -> runOpenRecording(args)
             "transcriber" -> HeadlessTranscriber.run(args.drop(1).toTypedArray())
@@ -113,6 +114,14 @@ object HeadlessMain {
         }
         println("telecom.in_call=$telecomInCall")
         println("voice_call.min_buffer=${minBuffer}")
+    }
+
+    private fun runRecordingCapability() {
+        val capability = HeadlessRecorderSession.probeVoiceCallCapability(preferStereo = true)
+        println("recording.voice_call_stereo_supported=${if (capability.stereoSupported) 1 else 0}")
+        println("recording.detected_mode=${capability.detectedMode}")
+        println("recording.voice_call_probe_status=${capability.status}")
+        println("recording.voice_call_probe_note=${capability.note}")
     }
 
     private fun runOpenOutputDir(args: Array<String>) {
