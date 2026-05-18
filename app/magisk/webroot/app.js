@@ -36,6 +36,7 @@ const recordingEnabled = document.querySelector("#recording-enabled");
 const recordingLogEnabled = document.querySelector("#recording-log-enabled");
 const recordingMode = document.querySelector("#recording-mode");
 const recordingModeNote = document.querySelector("#recording-mode-note");
+const recordingFormat = document.querySelector("#recording-format");
 const outputDir = document.querySelector("#output-dir");
 const minDuration = document.querySelector("#min-duration");
 
@@ -306,6 +307,26 @@ function updateRecordingModeNote(values = latestStatus) {
         : getProbeStatusSummary(values);
 }
 
+function parseAvailableRecordingFormats(values = latestStatus) {
+    const raw = values["recording.available_formats"] || "wav";
+    const formats = raw
+        .split(",")
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+    return formats.length ? formats : ["wav"];
+}
+
+function updateRecordingFormatOptions(values = latestStatus) {
+    if (!recordingFormat) {
+        return;
+    }
+
+    const available = new Set(parseAvailableRecordingFormats(values));
+    for (const option of Array.from(recordingFormat.options)) {
+        option.disabled = !available.has(option.value);
+    }
+}
+
 function getPrepareEstimateBytes(profile, values = latestComponentsStatus) {
     const whisperBytes = Number(values["component.whisper_cli.bytes_total"] || 0);
     const modelBytes = Number(values["component.base_model.bytes_total"] || 0);
@@ -329,6 +350,8 @@ function updateUiFromStatus(values) {
     if (recordingMode) {
         recordingMode.value = getSavedRecorderMode(values);
     }
+    updateRecordingFormatOptions(values);
+    ensureSelectValue(recordingFormat, values["recording.format"] || "wav", "Saved format");
     debugEnabled.checked = values["debug.enabled"] === "1";
     outputDir.value = values["output.dir"] || "/sdcard/Recordings/BCR";
     minDuration.value = values["recording.min_duration"] || "0";
@@ -427,6 +450,17 @@ function formatDirection(value) {
         default:
             return "Unknown direction";
     }
+}
+
+function formatChannelSummary(channels) {
+    const count = Number(channels || 0);
+    if (count >= 2) {
+        return "Stereo";
+    }
+    if (count === 1) {
+        return "Mono";
+    }
+    return "Unknown channels";
 }
 
 function basename(value) {
@@ -547,6 +581,7 @@ async function saveConfigAndRestart() {
     const enabled = recordingEnabled.checked ? "1" : "0";
     const logEnabled = recordingLogEnabled.checked ? "1" : "0";
     const stereoEnabled = recordingMode?.value === PREPARE_PROFILE_MONO ? "0" : "1";
+    const format = recordingFormat?.value || "wav";
     const output = outputDir.value.trim() || "/sdcard/Recordings/BCR";
     const duration = String(Math.max(0, Number.parseInt(minDuration.value || "0", 10) || 0));
 
@@ -555,6 +590,7 @@ async function saveConfigAndRestart() {
             `sh ./action.sh config set recording.enabled ${enabled}`,
             `sh ./action.sh config set recording.log_enabled ${logEnabled}`,
             `sh ./action.sh config set recording.stereo ${stereoEnabled}`,
+            `sh ./action.sh config set recording.format ${shellQuote(format)}`,
             `sh ./action.sh config set output.dir ${shellQuote(output)}`,
             `sh ./action.sh config set recording.min_duration ${duration}`,
             "sh ./action.sh restart",
@@ -782,7 +818,7 @@ function updateTranscriberWhisperLocalStatus(values = latestStatus, components =
     const savedPath = values["transcriber.whisper_local_path"] || components["component.whisper_cli.local_path"] || "";
     if (!transcriberWhisperLocalEnabled?.checked && !savedPath) {
         transcriberWhisperLocalStatus.textContent =
-            "Optional. Leave this off to use the automatic device-matched whisper.cpp CLI download.";
+            "Optional. Leave this off to use the recommended package for this device.";
         return;
     }
 
@@ -799,7 +835,7 @@ function updateTranscriberWhisperLocalStatus(values = latestStatus, components =
 
     if (!localPath) {
         transcriberWhisperLocalStatus.textContent =
-            "Optional. Enter a full path if you want to use your own compiled whisper.cpp CLI package.";
+            "Optional. Enter a full path only if you want to use your own whisper.cpp CLI package.";
         return;
     }
 
@@ -842,8 +878,7 @@ function renderTranscriberRecordings(recordings) {
 
         const meta = document.createElement("div");
         meta.className = "entry-meta";
-        const channelText = recording.audioChannels ? `${recording.audioChannels} channel` : "unknown channels";
-        meta.textContent = `${formatBytes(recording.sizeBytes)} • ${channelText} • ${formatTimestamp(recording.modifiedAt)}`;
+        meta.textContent = `${formatBytes(recording.sizeBytes)} • ${formatChannelSummary(recording.audioChannels)} • ${formatTimestamp(recording.modifiedAt)}`;
         body.appendChild(meta);
 
         const detail = document.createElement("div");
@@ -970,7 +1005,7 @@ async function saveTranscriberConfig() {
     if (!wasEnabled && willEnable) {
         const confirmed = await requestChoice({
             title: "Enable Transcriber",
-            message: "This enables offline transcription using a module-local whisper.cpp CLI and offline models. Use Prepare Components to download either the stereo set or the mono fallback set before queueing jobs.",
+            message: "This enables offline transcription. Prepare the required components before starting jobs.",
             actions: [
                 { label: "Enable", value: "enable", className: "" },
                 { label: "Cancel", value: "cancel", className: "ghost" },
@@ -1626,10 +1661,10 @@ document.querySelector("#install-transcriber-deps-button").addEventListener("cli
     const choice = await requestChoice({
         title: "Prepare Components",
         message:
-            `Choose which component set to prepare. ` +
-            `Stereo downloads the ABI-matched whisper.cpp CLI package plus ${whisperModelLabel} ` +
+            `Choose a component set. ` +
+            `Stereo downloads the device package plus ${whisperModelLabel} ` +
             `(${formatBytes(stereoEstimate)}). ` +
-            `Mono fallback downloads the ABI-matched whisper.cpp CLI package plus ${tdrzModelLabel} ` +
+            `Mono fallback downloads the device package plus ${tdrzModelLabel} ` +
             `(${formatBytes(monoEstimate)}). ` +
             `Current recorder mode: ${getRecorderModeLabel(recorderMode)}.`,
         actions: [

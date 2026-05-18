@@ -23,7 +23,7 @@ object HeadlessMain {
     @JvmStatic
     fun main(args: Array<String>) {
         require(args.isNotEmpty()) {
-            "Expected subcommand: daemon <module_dir> <output_dir> <min_duration> <log_enabled> <notifications_enabled> <stereo_enabled> | probe <module_dir> <output_dir> | open-output-dir <output_dir> | open-recording <path> | transcriber ..."
+            "Expected subcommand: daemon <module_dir> <output_dir> <min_duration> <log_enabled> <notifications_enabled> <stereo_enabled> <recording_format> | probe <module_dir> <output_dir> | open-output-dir <output_dir> | open-recording <path> | transcriber ..."
         }
 
         when (args[0]) {
@@ -51,6 +51,7 @@ object HeadlessMain {
         val logEnabled = parseBooleanArg(args.getOrNull(4), defaultValue = true)
         val notificationsEnabled = parseBooleanArg(args.getOrNull(5), defaultValue = true)
         val stereoEnabled = parseBooleanArg(args.getOrNull(6), defaultValue = false)
+        val recordingFormat = HeadlessRecordingFormat.fromConfigValue(args.getOrNull(7))
         val context = getSystemContext()
 
         HeadlessDaemon(
@@ -62,6 +63,7 @@ object HeadlessMain {
                 logEnabled = logEnabled,
                 notificationsEnabled = notificationsEnabled,
                 stereoEnabled = stereoEnabled,
+                recordingFormat = recordingFormat,
             ),
         ).start()
 
@@ -79,7 +81,7 @@ object HeadlessMain {
         val telephonyManager = context.getSystemService(TelephonyManager::class.java)
         val telecomManager = context.getSystemService(TelecomManager::class.java)
         val minBuffer = AudioRecord.getMinBufferSize(
-            HeadlessRecorderSession.SAMPLE_RATE.toInt(),
+            HeadlessRecorderSession.DEFAULT_SAMPLE_RATE.toInt(),
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
@@ -122,6 +124,7 @@ object HeadlessMain {
         println("recording.detected_mode=${capability.detectedMode}")
         println("recording.voice_call_probe_status=${capability.status}")
         println("recording.voice_call_probe_note=${capability.note}")
+        println("recording.available_formats=${HeadlessRecordingFormat.availableConfigValues().joinToString(",")}")
     }
 
     private fun runOpenOutputDir(args: Array<String>) {

@@ -5,6 +5,10 @@
 
 package com.chiller3.bcr.headless
 
+import android.media.AudioFormat
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.decodeFromString
@@ -12,6 +16,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.BufferedOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -109,7 +114,7 @@ object HeadlessTranscriber {
                     name = file.name,
                     sizeBytes = file.length(),
                     modifiedAt = Instant.ofEpochMilli(file.lastModified()).toString(),
-                    audioChannels = inspectWaveChannels(file),
+                    audioChannels = inspectAudioChannels(file),
                     transcriptTxtPath = txt.absolutePath,
                     transcriptDocxPath = docx.absolutePath,
                     transcriptTxtExists = txt.exists(),
@@ -366,7 +371,7 @@ object HeadlessTranscriber {
                 overwrite = conflictPolicy == ConflictPolicy.Overwrite,
                 status = JobStatus.Queued.serializedName,
                 createdAt = Instant.now().toString(),
-                audioChannels = inspectWaveChannels(recording),
+                audioChannels = inspectAudioChannels(recording),
                 speakerSelfName = resolvedSpeakerSelfName,
             )
         }
@@ -409,8 +414,8 @@ object HeadlessTranscriber {
         val startedAt = Instant.now()
         val recording = File(job.recordingPath)
         val transcript = File(job.transcriptPath)
-        val channels = inspectWaveChannels(recording)
         val speakerSelfName = normalizeSpeakerName(job.speakerSelfName.ifBlank { defaultSpeakerSelfName })
+        var channels = inspectAudioChannels(recording)
 
         fun fail(message: String) {
             state.queue.replace(job.id) {
@@ -437,6 +442,15 @@ object HeadlessTranscriber {
             fail("Recording is missing")
             return
         }
+
+        val workDir = File(state.workDir, job.id).apply { mkdirs() }
+        val preparedRecording = try {
+            prepareRecordingForWhisper(recording, workDir)
+        } catch (e: Exception) {
+            fail(e.localizedMessage ?: e.javaClass.simpleName)
+            return
+        }
+        channels = preparedRecording.audioChannels ?: channels
 
         val diarization = try {
             diarizationMode(channels, tinydiarizeModelPath)
@@ -499,7 +513,6 @@ object HeadlessTranscriber {
         )
         notifier.showStarted(recording, diarization)
 
-        val workDir = File(state.workDir, job.id).apply { mkdirs() }
         val execution = try {
             when (diarization) {
                 DiarizationMode.Stereo -> transcribeStereoRecording(
@@ -511,6 +524,7 @@ object HeadlessTranscriber {
                     modelPath = modelPath,
                     language = job.language,
                     workDir = workDir,
+                    preparedRecording = preparedRecording.file,
                     speakerSelfName = speakerSelfName,
                 )
                 DiarizationMode.TinyDiarize -> transcribeSinglePass(
@@ -520,7 +534,7 @@ object HeadlessTranscriber {
                     activeFile = recording,
                     whisperPath = whisperPath,
                     modelPath = chosenModel,
-                    recording = recording,
+                    recording = preparedRecording.file,
                     language = job.language,
                     outputBase = File(workDir, "whisper"),
                     diarization = diarization,
@@ -771,9 +785,10 @@ object HeadlessTranscriber {
         modelPath: File,
         language: String,
         workDir: File,
+        preparedRecording: File,
         speakerSelfName: String,
     ): TranscriptionExecutionResult {
-        val split = splitStereoWave(activeFile, workDir)
+        val split = splitStereoWave(preparedRecording, workDir)
         if (split == null) {
             return transcribeSinglePass(
                 state = state,
@@ -782,7 +797,7 @@ object HeadlessTranscriber {
                 activeFile = activeFile,
                 whisperPath = whisperPath,
                 modelPath = modelPath,
-                recording = activeFile,
+                recording = preparedRecording,
                 language = language,
                 outputBase = File(workDir, "whisper"),
                 diarization = DiarizationMode.Stereo,
@@ -809,7 +824,7 @@ object HeadlessTranscriber {
                 activeFile = activeFile,
                 whisperPath = whisperPath,
                 modelPath = modelPath,
-                recording = activeFile,
+                recording = preparedRecording,
                 language = language,
                 outputBase = File(workDir, "whisper-stereo"),
                 diarization = null,
@@ -2149,8 +2164,225 @@ object HeadlessTranscriber {
         return File(transcriptDir, "$sanitizedStem.${format.extension}")
     }
 
-    private fun inspectWaveChannels(file: File): Int? {
-        return readWaveMetadata(file)?.channelCount
+    private fun inspectAudioChannels(file: File): Int? {
+        return readWaveMetadata(file)?.channelCount ?: inspectExtractorAudioTrack(file)?.channelCount
+    }
+
+    private fun prepareRecordingForWhisper(recording: File, workDir: File): PreparedRecording {
+        val waveMetadata = readWaveMetadata(recording)
+        if (waveMetadata != null && waveMetadata.audioFormat == 1 && waveMetadata.bitsPerSample == 16) {
+            return PreparedRecording(
+                file = recording,
+                audioChannels = waveMetadata.channelCount,
+            )
+        }
+
+        val normalized = File(workDir, "${recording.nameWithoutExtension}.whisper.wav")
+        normalizeRecordingToWave(recording, normalized)
+        val normalizedMetadata = readWaveMetadata(normalized)
+            ?: throw IOException("Unable to inspect normalized audio: ${recording.name}")
+        return PreparedRecording(
+            file = normalized,
+            audioChannels = normalizedMetadata.channelCount,
+        )
+    }
+
+    private fun normalizeRecordingToWave(recording: File, destination: File) {
+        destination.parentFile?.mkdirs()
+        if (destination.exists()) {
+            destination.delete()
+        }
+
+        val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
+
+        try {
+            extractor.setDataSource(recording.absolutePath)
+            val track = findAudioTrack(extractor)
+                ?: throw IOException("Unsupported audio file for transcription: ${recording.name}")
+            extractor.selectTrack(track.index)
+
+            codec = MediaCodec.createDecoderByType(track.mimeType)
+            codec.configure(extractor.getTrackFormat(track.index), null, null, 0)
+            codec.start()
+
+            var channelCount = track.channelCount?.coerceAtLeast(1) ?: 1
+            var sampleRate = track.sampleRate?.coerceAtLeast(1) ?: HeadlessRecorderSession.DEFAULT_SAMPLE_RATE.toInt()
+            var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
+            var bytesWritten = 0L
+            var inputEnded = false
+            var outputEnded = false
+            val bufferInfo = MediaCodec.BufferInfo()
+
+            BufferedOutputStream(destination.outputStream()).use { output ->
+                output.write(ByteArray(44))
+
+                while (!outputEnded) {
+                    if (!inputEnded) {
+                        val inputIndex = codec.dequeueInputBuffer(10_000)
+                        if (inputIndex >= 0) {
+                            val inputBuffer = codec.getInputBuffer(inputIndex)
+                                ?: throw IOException("Decoder input buffer unavailable")
+                            inputBuffer.clear()
+                            val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                            if (sampleSize < 0) {
+                                codec.queueInputBuffer(
+                                    inputIndex,
+                                    0,
+                                    0,
+                                    0L,
+                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+                                )
+                                inputEnded = true
+                            } else {
+                                codec.queueInputBuffer(
+                                    inputIndex,
+                                    0,
+                                    sampleSize,
+                                    extractor.sampleTime.coerceAtLeast(0L),
+                                    0,
+                                )
+                                extractor.advance()
+                            }
+                        }
+                    }
+
+                    when (val outputIndex = codec.dequeueOutputBuffer(bufferInfo, 10_000)) {
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            val outputFormat = codec.outputFormat
+                            if (outputFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                                channelCount = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
+                            }
+                            if (outputFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                                sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE).coerceAtLeast(1)
+                            }
+                            if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                                pcmEncoding = outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                            }
+                        }
+                        else -> if (outputIndex >= 0) {
+                            val outputBuffer = codec.getOutputBuffer(outputIndex)
+                                ?: throw IOException("Decoder output buffer unavailable")
+                            if (bufferInfo.size > 0) {
+                                outputBuffer.position(bufferInfo.offset)
+                                outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                                bytesWritten += writeDecodedPcm(
+                                    outputBuffer = outputBuffer,
+                                    pcmEncoding = pcmEncoding,
+                                    output = output,
+                                )
+                            }
+                            codec.releaseOutputBuffer(outputIndex, false)
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                outputEnded = true
+                            }
+                        }
+                    }
+                }
+            }
+
+            RandomAccessFile(destination, "rw").use { output ->
+                output.seek(0)
+                output.write(buildWaveHeaderBytes(sampleRate, channelCount, 16, bytesWritten))
+            }
+        } catch (e: Exception) {
+            destination.delete()
+            throw IOException(
+                "Unable to prepare ${recording.name} for transcription: " +
+                    (e.localizedMessage ?: e.javaClass.simpleName),
+                e,
+            )
+        } finally {
+            runCatching { codec?.stop() }
+            runCatching { codec?.release() }
+            runCatching { extractor.release() }
+        }
+    }
+
+    private fun inspectExtractorAudioTrack(file: File): AudioTrackInfo? {
+        if (!file.isFile) {
+            return null
+        }
+
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(file.absolutePath)
+            findAudioTrack(extractor)
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }
+
+    private fun findAudioTrack(extractor: MediaExtractor): AudioTrackInfo? {
+        for (index in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(index)
+            val mimeType = format.getString(MediaFormat.KEY_MIME) ?: continue
+            if (!mimeType.startsWith("audio/")) {
+                continue
+            }
+
+            return AudioTrackInfo(
+                index = index,
+                mimeType = mimeType,
+                channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                    format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                } else {
+                    null
+                },
+                sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                    format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                } else {
+                    null
+                },
+            )
+        }
+
+        return null
+    }
+
+    private fun writeDecodedPcm(
+        outputBuffer: ByteBuffer,
+        pcmEncoding: Int,
+        output: OutputStream,
+    ): Long {
+        return when (pcmEncoding) {
+            0, AudioFormat.ENCODING_PCM_16BIT -> {
+                val bytes = ByteArray(outputBuffer.remaining())
+                outputBuffer.get(bytes)
+                output.write(bytes)
+                bytes.size.toLong()
+            }
+            AudioFormat.ENCODING_PCM_8BIT -> {
+                val input = ByteArray(outputBuffer.remaining())
+                outputBuffer.get(input)
+                val converted = ByteArray(input.size * 2)
+                var outputOffset = 0
+                for (sample in input) {
+                    val centered = ((sample.toInt() and 0xff) - 128) shl 8
+                    converted[outputOffset++] = (centered and 0xff).toByte()
+                    converted[outputOffset++] = ((centered ushr 8) and 0xff).toByte()
+                }
+                output.write(converted, 0, outputOffset)
+                outputOffset.toLong()
+            }
+            AudioFormat.ENCODING_PCM_FLOAT -> {
+                val converted = ByteArray((outputBuffer.remaining() / 4) * 2)
+                val floatBuffer = outputBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+                var outputOffset = 0
+                while (floatBuffer.remaining() >= 4) {
+                    val sample = floatBuffer.float.coerceIn(-1f, 1f)
+                    val pcm16 = (sample * 32767f).roundToInt().coerceIn(-32768, 32767)
+                    converted[outputOffset++] = (pcm16 and 0xff).toByte()
+                    converted[outputOffset++] = ((pcm16 ushr 8) and 0xff).toByte()
+                }
+                output.write(converted, 0, outputOffset)
+                outputOffset.toLong()
+            }
+            else -> throw IOException("Unsupported decoder PCM encoding: $pcmEncoding")
+        }
     }
 
     private fun detectMonoSpeechRegions(recording: File): List<SpeechRegion>? {
@@ -2407,13 +2639,22 @@ object HeadlessTranscriber {
         bitsPerSample: Int,
         dataSize: Long,
     ) {
+        output.write(buildWaveHeaderBytes(sampleRate, channelCount, bitsPerSample, dataSize))
+    }
+
+    private fun buildWaveHeaderBytes(
+        sampleRate: Int,
+        channelCount: Int,
+        bitsPerSample: Int,
+        dataSize: Long,
+    ): ByteArray {
         val bytesPerSample = bitsPerSample / 8
         val blockAlign = channelCount * bytesPerSample
         val byteRate = sampleRate * blockAlign
         val chunkSize = if (dataSize >= Int.MAX_VALUE) 0 else dataSize.toInt() + 36
         val resolvedDataSize = if (dataSize >= Int.MAX_VALUE) 0 else dataSize.toInt()
 
-        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+        return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray(Charsets.US_ASCII))
             putInt(chunkSize)
             put("WAVE".toByteArray(Charsets.US_ASCII))
@@ -2428,9 +2669,7 @@ object HeadlessTranscriber {
             put("data".toByteArray(Charsets.US_ASCII))
             putInt(resolvedDataSize)
             flip()
-        }
-
-        output.write(header.array(), 0, header.remaining())
+        }.array()
     }
 
     private fun readLittleEndianShort(input: RandomAccessFile): Int =
@@ -2515,7 +2754,7 @@ object HeadlessTranscriber {
             ?.takeIf { it.isNotEmpty() }
             ?: DEFAULT_SELF_SPEAKER_NAME
 
-    private val AUDIO_EXTENSIONS = setOf("wav", "flac", "m4a", "mp3", "ogg", "opus", "aac", "amr")
+    private val AUDIO_EXTENSIONS = setOf("wav", "m4a", "ogg", "opus", "aac")
     private val ACTIVE_STATUSES = setOf(JobStatus.Queued.serializedName, JobStatus.Running.serializedName)
     private val WHISPER_CONTROL_TOKEN_PATTERN =
         Regex("""(?i)<\|[^|]+?\|>|\[_[A-Z0-9]+(?:_[A-Z0-9]+)*_?\]|\[SPEAKER[ _]TURN\]""")
@@ -2909,6 +3148,18 @@ private data class WaveMetadata(
     val bitsPerSample: Int,
     val dataOffset: Long,
     val dataSize: Long,
+)
+
+private data class PreparedRecording(
+    val file: File,
+    val audioChannels: Int?,
+)
+
+private data class AudioTrackInfo(
+    val index: Int,
+    val mimeType: String,
+    val channelCount: Int?,
+    val sampleRate: Int?,
 )
 
 private data class StereoSplitFiles(

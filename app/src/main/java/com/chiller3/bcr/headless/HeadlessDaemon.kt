@@ -30,6 +30,7 @@ data class HeadlessConfig(
     val logEnabled: Boolean,
     val notificationsEnabled: Boolean,
     val stereoEnabled: Boolean,
+    val recordingFormat: HeadlessRecordingFormat,
 )
 
 class HeadlessDaemon(
@@ -78,6 +79,7 @@ class HeadlessDaemon(
                 "config.log_enabled" to config.logEnabled.toString(),
                 "config.notifications_enabled" to config.notificationsEnabled.toString(),
                 "config.stereo_enabled" to config.stereoEnabled.toString(),
+                "config.recording_format" to config.recordingFormat.configValue,
                 "power.charging" to "0",
                 "telephony.monitor_mode" to "callback+broadcast+poll",
                 "telephony.callback_registered" to "0",
@@ -350,6 +352,7 @@ class HeadlessDaemon(
             minDurationSeconds = config.minDurationSeconds,
             direction = direction,
             stereoEnabled = config.stereoEnabled,
+            recordingFormat = config.recordingFormat,
             listener = this,
         )
         recorder = session

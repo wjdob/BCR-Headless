@@ -66,6 +66,9 @@ object HeadlessIntents {
             uri = uri,
             mimeType = when (canonicalFile.extension.lowercase()) {
                 "wav" -> "audio/wav"
+                "ogg", "opus" -> "audio/ogg"
+                "m4a" -> "audio/mp4"
+                "aac" -> "audio/aac"
                 else -> "audio/*"
             },
         )

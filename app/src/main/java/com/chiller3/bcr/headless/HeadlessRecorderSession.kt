@@ -11,7 +11,6 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.system.Os
 import com.chiller3.bcr.format.Encoder
-import com.chiller3.bcr.format.WaveFormat
 import com.chiller3.bcr.output.CallDirection
 import java.io.File
 import java.io.FileOutputStream
@@ -27,6 +26,7 @@ class HeadlessRecorderSession(
     private val minDurationSeconds: Int,
     private val direction: CallDirection?,
     private val stereoEnabled: Boolean,
+    private val recordingFormat: HeadlessRecordingFormat,
     private val listener: Listener,
 ) : Thread(HeadlessRecorderSession::class.java.simpleName) {
     interface Listener {
@@ -64,7 +64,7 @@ class HeadlessRecorderSession(
 
             startedAt = ZonedDateTime.now()
             val stem = buildFileStem(startedAt)
-            outputFile = File(outputDir, "$stem.wav")
+            outputFile = File(outputDir, "$stem.${recordingFormat.extension}")
             println("Recorder session started: output=${outputFile.absolutePath}")
 
             val info = FileOutputStream(outputFile).use { stream ->
@@ -130,7 +130,9 @@ class HeadlessRecorderSession(
     private fun recordUntilStop(fd: java.io.FileDescriptor): RecordingInfo {
         AndroidProcess.setThreadPriority(AndroidProcess.THREAD_PRIORITY_URGENT_AUDIO)
 
-        val recordingInput = createAudioRecord(stereoEnabled)
+        val encoderFormat = recordingFormat.newFormat()
+        val sampleRate = encoderFormat.sampleRateInfo.default
+        val recordingInput = createAudioRecord(stereoEnabled, sampleRate)
         val audioRecord = recordingInput.audioRecord
 
         try {
@@ -143,10 +145,10 @@ class HeadlessRecorderSession(
                     "buffer=${recordingInput.minBufferSize * 6}",
             )
 
-            val container = WaveFormat.getContainer(fd)
+            val container = encoderFormat.getContainer(fd)
             try {
-                val mediaFormat = WaveFormat.getMediaFormat(recordingInput.channelCount, SAMPLE_RATE, null)
-                val encoder = WaveFormat.getEncoder(mediaFormat, container)
+                val mediaFormat = encoderFormat.getMediaFormat(recordingInput.channelCount, sampleRate, null)
+                val encoder = encoderFormat.getEncoder(mediaFormat, container)
 
                 try {
                     encoder.start()
@@ -155,6 +157,7 @@ class HeadlessRecorderSession(
                         encoder = encoder,
                         bufferSize = recordingInput.minBufferSize,
                         channelCount = recordingInput.channelCount,
+                        sampleRate = sampleRate.toInt(),
                     )
                 } finally {
                     encoder.stop()
@@ -175,8 +178,8 @@ class HeadlessRecorderSession(
     }
 
     @SuppressLint("MissingPermission")
-    private fun createAudioRecord(preferStereo: Boolean): RecordingInput {
-        return openVoiceCallInput(preferStereo, logger = ::println)
+    private fun createAudioRecord(preferStereo: Boolean, sampleRate: UInt): RecordingInput {
+        return openVoiceCallInput(preferStereo, sampleRate, logger = ::println)
     }
 
     private fun encodeLoop(
@@ -184,6 +187,7 @@ class HeadlessRecorderSession(
         encoder: Encoder,
         bufferSize: Int,
         channelCount: Int,
+        sampleRate: Int,
     ): RecordingInfo {
         var numFramesTotal = 0L
         var numFramesEncoded = 0L
@@ -246,7 +250,7 @@ class HeadlessRecorderSession(
             wallDurationNanos = System.nanoTime() - wallBeginNanos,
             framesTotal = numFramesTotal,
             framesEncoded = numFramesEncoded,
-            sampleRate = SAMPLE_RATE.toInt(),
+            sampleRate = sampleRate,
             channelCount = channelCount,
         )
     }
@@ -263,14 +267,14 @@ class HeadlessRecorderSession(
     }
 
     companion object {
-        const val SAMPLE_RATE: UInt = 16_000u
+        const val DEFAULT_SAMPLE_RATE: UInt = 16_000u
 
         private const val BYTES_PER_SAMPLE = 2
         private val TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
 
         @SuppressLint("MissingPermission")
         fun probeVoiceCallCapability(preferStereo: Boolean = true): VoiceCallCapability {
-            val input = openVoiceCallInput(preferStereo, logger = null)
+            val input = openVoiceCallInput(preferStereo, DEFAULT_SAMPLE_RATE, logger = null)
             return try {
                 val stereoSupported = input.channelCount >= 2
                 VoiceCallCapability(
@@ -294,6 +298,7 @@ class HeadlessRecorderSession(
         @SuppressLint("MissingPermission")
         private fun openVoiceCallInput(
             preferStereo: Boolean,
+            sampleRate: UInt,
             logger: ((String) -> Unit)?,
         ): RecordingInput {
             val specs = buildList {
@@ -307,7 +312,7 @@ class HeadlessRecorderSession(
 
             for (spec in specs) {
                 val minBufferSize = AudioRecord.getMinBufferSize(
-                    SAMPLE_RATE.toInt(),
+                    sampleRate.toInt(),
                     spec.channelMask,
                     AudioFormat.ENCODING_PCM_16BIT,
                 )
@@ -319,7 +324,7 @@ class HeadlessRecorderSession(
 
                 val audioRecord = AudioRecord(
                     MediaRecorder.AudioSource.VOICE_CALL,
-                    SAMPLE_RATE.toInt(),
+                    sampleRate.toInt(),
                     spec.channelMask,
                     AudioFormat.ENCODING_PCM_16BIT,
                     minBufferSize * 6,

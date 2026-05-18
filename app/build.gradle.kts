@@ -89,7 +89,7 @@ val gitVersionTriple = describeVersion(git)
 val projectVersionMajor = 1
 val projectVersionMinor = 1
 val projectVersionPatch = 0
-val projectVersionSuffix = "test.14"
+val projectVersionSuffix = "test.15"
 val gitVersionCode = getVersionCode(
     projectVersionMajor,
     projectVersionMinor,
@@ -270,7 +270,7 @@ androidComponents.onVariants { variant ->
             props["version"] = "v${variantVersionName.get()}"
             props["versionCode"] = variantVersionCode.get().toString()
             props["author"] = "wjdob"
-            props["description"] = "TEST BUILD | Headless call recorder rebuild with experimental transcription"
+            props["description"] = "TEST BUILD | Headless call recorder with offline transcription"
             props["updateJson"] = "${projectUrl}/raw/${releaseMetadataBranch}/app/magisk/updates/${variant.name}/info.json"
 
             outputFile.get().asFile.writeText(

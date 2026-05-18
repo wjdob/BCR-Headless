@@ -1,79 +1,78 @@
 # BCR Headless Test
 
-<img src="app/images/icon.svg" alt="app icon" width="72" />
+<img src="app/images/icon.svg" alt="BCR Headless icon" width="72" />
 
-> Test build: this branch/package is temporarily labeled as
-> `BCR Headless Test` with module id `bcr.headless.test` and version
-> `1.1.0-test.14` so it can be installed beside the original `1.0.0`
-> `bcr.headless` release.
+> Test build: this branch/package is temporarily labeled as `BCR Headless Test`
+> with module id `bcr.headless.test` and version `1.1.0-test.15` so it can be
+> installed beside the original `1.0.0` `bcr.headless` release.
 
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
 [![license badge](https://img.shields.io/github/license/wjdob/BCR-Headless-Test)](./LICENSE)
 
-BCR Headless is a headless call recorder module for rooted Android devices. It is an architectural rebuild of the original BCR project that keeps the recorder inside the module directory, exposes configuration through a module WebUI, and avoids installing a visible companion app.
+BCR Headless is a headless call recorder module for rooted Android devices. It
+keeps recording, state, and optional transcription inside the module directory
+and exposes configuration through a module WebUI instead of a visible companion
+app.
 
-<img src="app/images/UI1.jpg" alt="UI top part screenshot" width="200" /> <img src="app/images/UI2.jpg" alt="UI bottom part screenshot" width="200" />
+<img src="app/images/UI1.jpg" alt="WebUI screenshot top section" width="200" />
+<img src="app/images/UI2.jpg" alt="WebUI screenshot lower section" width="200" />
 
 ## Credits
 
-This project is based on the original BCR project by Andrew Gunnerson (`chenxiaolong`) and its contributors:
+This project is based on the original BCR project by Andrew Gunnerson
+(`chenxiaolong`) and its contributors.
 
-* Original project: https://github.com/chenxiaolong/BCR
-* Original author: Andrew Gunnerson
-* Original contributors: see the upstream repository history and contributors list
+- Original project: https://github.com/chenxiaolong/BCR
+- Original author: Andrew Gunnerson
+- Original contributors: see the upstream repository history and contributors
+  list
 
-## What Changed
+## What This Build Is
 
-The original BCR relied on a system app and privileged Android components. This rebuild pivots to a different architecture:
+This rebuild pivots away from the original system-app architecture:
 
-* No visible Android settings app is installed
-* The helper APK is stored inside the module under `tools/bcr-headless.apk`
-* `skip_mount` avoids creating a `/system` overlay footprint
-* Configuration lives in module-local files and mirrors into KernelSU module config when available
-* A module WebUI is the primary configuration surface for KernelSU and standalone KSUWebUI-compatible apps
-
-This design exists to reduce the user-space surface that security-sensitive apps can inspect easily while still keeping call recording functional.
+- no visible settings app is installed
+- the helper APK lives inside the module under `tools/bcr-headless.apk`
+- configuration is stored in module-local files and mirrored into KernelSU
+  module config when available
+- the module WebUI is the primary control surface
+- recordings, transcriber queue state, and module logs stay with the module
 
 ## Current Features
 
-* Headless boot-time recorder daemon
-* Works as a Magisk or KernelSU module
-* WebUI implementation
-* Enable or disable recording from the WebUI
-* Configure output directory
-* Configure minimum recording duration
-* Optional in-module recording log with a dedicated WebUI view
-* Best-effort "Open output folder" action from the WebUI
-* Open individual recordings from the recorded-calls view
-* Experimental offline transcription queue with speaker-labeled transcripts
-* In-place updates preserve module config, recording history, queued transcriber state, and downloaded transcriber components
-* Stereo VOICE_CALL capture by default when supported, with manual mono fallback override in the WebUI
-* ABI-aware transcriber component preparation for Android `whisper-cli`
-* Separate debug view for runtime status, probe output, and logs
-* Recording files saved directly to a plain filesystem path
+- headless boot-time recorder daemon
+- Magisk and KernelSU module packaging
+- recorder enable/disable from WebUI
+- output directory selection
+- minimum-duration filtering
+- recorder output format selection:
+  - `WAV/PCM`
+  - `OGG/Opus`
+  - `M4A/AAC`
+- stereo capture by default when `VOICE_CALL` stereo initialization succeeds
+- manual `Mono fallback` override in the WebUI
+- optional in-module recording history
+- offline transcription queue with `.txt` and `.docx` output
+- custom self-speaker label in transcripts
+- stereo component preparation or mono-fallback component preparation
+- automatic normalization of compressed recordings to PCM WAV before whisper
+  transcription so diarization stays on the same stable pipeline
+- optional automatic queueing of newly saved recordings
+- optional charging-only auto-start for queued transcription jobs
+- update installs preserve config, recorder history, queue state, and downloaded
+  transcriber components
+- debug view for recorder runtime, transcriber state, component status, and logs
 
 ## Current Limitations
 
-This rebuild is intentionally narrower than the original BCR app:
-
-* Output is currently WAV/PCM only
-* Transcription is experimental and depends on published transcriber tool
-  release assets plus local models
-* No cloud transcription backend is included
-* Speaker labels are best-effort diarization labels such as `Speaker A` and
-  `Speaker B`; mono recordings require a TinyDiarize-capable model, while
-  stereo WAV recordings use a full-call whisper.cpp timeline plus left/right
-  reference decodes to assign sentence-level speaker turns and timestamps.
-  Unsupported stereo formats fall back to whisper.cpp diarization.
-* Multiple people speaking on the same side of a stereo call are still grouped
-  together per channel in this test build
-* The output path is a plain filesystem path, not a SAF tree. Don't ask for enhancement.
-* Auto-record rules are not ported
-* Contacts integration is not ported
-* Best-effort phone-number resolution for filenames and recording-log entries. Tested OK but YMMV.
-* Filename templates are not ported
-* The current working monitor prefers polling on ROMs where framework callbacks are unavailable
-* Debug/runtime details are module-local and do not try to recreate every original app workflow
+- transcription remains experimental
+- speaker labeling is best-effort
+- mono speaker labeling requires a TinyDiarize-capable model
+- stereo diarization is optimized for the common two-side call case
+- multiple different people speaking on the same side/channel are not fully
+  separated yet
+- auto-record rules, contacts integration, and filename-template workflows from
+  the original BCR app are not part of this headless rebuild
 
 ## Usage
 
@@ -81,54 +80,55 @@ This rebuild is intentionally narrower than the original BCR app:
 2. Flash it as a Magisk or KernelSU module.
 3. Reboot.
 4. Open the module WebUI.
-5. Configure:
-   * `Recording enabled`
-   * `Output directory`
-   * `Minimum duration`
-   * `Recording log` if desired
-6. Save changes.
+5. Save your recorder settings.
+6. If you want transcripts, enable the transcriber and run `Prepare Components`.
 
-For Magisk installs, the same module can be opened from a standalone KSUWebUI-compatible app.
+## WebUI Overview
 
-## WebUI Notes
+### Recorder
 
-The main recorder screen is intended for normal use:
+- enable or disable recording
+- choose stereo or mono fallback
+- choose the output format
+- set the output directory
+- set the minimum recording duration
 
-* Save changes
-* Reset defaults
-* Toggle recording
-* Open the output folder
+### Recordings
 
-The recordings screen is intended for review of captured recordings:
+- review saved recording history
+- open saved recordings
+- clear the module recording history
 
-* View captured call recordings
-* View call recording capture status
-* Open the recordings
-* Clear recording log
+### Transcriber
 
-The transcriber screen is intended for offline post-processing:
+- enable or disable offline transcription
+- choose the transcript directory, source language, and transcript format
+- choose the Whisper model and optional overrides
+- prepare stereo or mono-fallback components
+- queue one, many, or all recordings
+- pause, resume, stop, remove, or clear jobs
 
-* Enable or disable the experimental transcriber
-* Configure transcript directory, source language, self-speaker name, and `.txt`/`.docx` output
-* Prepare module-local whisper.cpp/model component directories
-* Auto-select an Android `whisper-cli` package from the transcriber tools
-  manifest, or point to a local Android `whisper-cli` binary/zip package path
-* Select one, multiple, or all recordings for the queue
-* Skip, overwrite, or cancel when matching transcripts already exist
-* Pause, resume, stop, remove, and clear queued transcription jobs
+### Debug
 
-The debug screen is intended for troubleshooting:
+- enable troubleshooting data only when needed
+- inspect recorder runtime and probe output
+- inspect transcriber status, component state, job state, and logs
 
-* Enable or disable global debug tracking
-* Refresh runtime state
-* Restart the daemon
-* Run a probe
-* Show daemon logs
-* Inspect transcriber status, component downloads, queued jobs, and transcriber logs
+## Transcriber Component Sets
+
+`Prepare Components` offers two paths:
+
+- `Stereo`: downloads the device-matched `whisper.cpp` CLI package plus the
+  selected Whisper model
+- `Mono fallback`: downloads the device-matched `whisper.cpp` CLI package plus
+  the selected TinyDiarize model
+
+If you choose a compressed recording format such as `OGG/Opus` or `M4A/AAC`,
+the transcriber converts the recording to a temporary PCM WAV before sending it
+to whisper. This keeps transcription and diarization behavior consistent with
+the WAV path.
 
 ## Shell Control
-
-The module can also be controlled directly:
 
 ```bash
 su -c sh /data/adb/modules/bcr.headless.test/action.sh status
@@ -142,60 +142,57 @@ su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber list
 su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber enqueue skip /sdcard/Recordings/BCR/example.wav
 ```
 
-## Configuration Keys
+## Main Configuration Keys
 
-The main module config keys are:
-
-* `recording.enabled`
-* `output.dir`
-* `recording.min_duration`
-* `recording.log_enabled`
-* `recording.stereo`
-* `debug.enabled`
-* `transcriber.enabled`
-* `transcriber.output_dir`
-* `transcriber.language`
-* `transcriber.speaker_self_name`
-* `transcriber.output_format`
-* `transcriber.whisper_path`
-* `transcriber.model_path`
-* `transcriber.tinydiarize_model_path`
-* `transcriber.whisper_manifest_url`
-* `transcriber.whisper_local_path`
-* `transcriber.whisper_url`
-* `transcriber.model_url`
-* `transcriber.tinydiarize_model_url`
+- `recording.enabled`
+- `output.dir`
+- `recording.min_duration`
+- `recording.log_enabled`
+- `recording.stereo`
+- `recording.format`
+- `recording.available_formats`
+- `debug.enabled`
+- `transcriber.enabled`
+- `transcriber.output_dir`
+- `transcriber.language`
+- `transcriber.speaker_self_name`
+- `transcriber.output_format`
+- `transcriber.whisper_path`
+- `transcriber.model_path`
+- `transcriber.tinydiarize_model_path`
+- `transcriber.whisper_manifest_url`
+- `transcriber.whisper_local_path`
+- `transcriber.whisper_url`
+- `transcriber.model_url`
+- `transcriber.tinydiarize_model_url`
 
 ## Transcriber Native Tools
 
-The transcriber uses a repo-owned Android `whisper-cli` build instead of
-depending on upstream desktop release assets. The pinned whisper.cpp source and
-Android build matrix live in:
+This project uses repo-owned Android `whisper.cpp` builds for the transcriber.
+The pinned whisper.cpp source and build matrix live in:
 
 ```text
 scripts/transcriber-tools.env
 ```
 
-To update whisper.cpp later, change `WHISPER_CPP_REF`, run the
-`Transcriber tools` workflow, and publish the generated assets. The workflow
-builds CPU-only generic packages for `arm64-v8a`, `armeabi-v7a`, and `x86_64`,
-then publishes:
+The `Transcriber tools` workflow publishes:
 
-* `transcriber-tools.env`
-* `whisper-cli-android-<abi>.zip`
-* `SHA256SUMS`
+- `transcriber-tools.env`
+- `whisper-cli-android-<abi>.zip`
+- `SHA256SUMS`
 
-`Prepare Components` downloads the manifest, selects the best matching ABI from
-`ro.product.cpu.abilist`, verifies the package SHA-256, extracts `whisper-cli`,
-and runs a lightweight executable check before marking the component ready.
+`Prepare Components` downloads the manifest, chooses the best matching ABI,
+verifies the package when checksums are available, and installs the CLI plus the
+selected model set.
 
 ## Versioning
 
-This rebuild uses its own version line and does not inherit the original BCR release numbering. The current build metadata uses:
+This rebuild uses its own version line and does not inherit the original BCR
+release numbering.
 
-* `1.x` for the standalone headless rebuild line
-* `1.1.0-test.14` for this temporary parallel-install test build
-* plain semantic version names such as `1.0.0` for stable releases
+- `1.0.0` is the first standalone headless release
+- `1.1.0-test.15` is the current temporary parallel-install test build
+- future stable releases continue from the headless rebuild line
 
 ## Building
 
@@ -207,16 +204,10 @@ Build the release module zip with:
 
 Optional Gradle properties:
 
-* `-PprojectUrl=https://github.com/<you>/<repo>`
-* `-PreleaseMetadataBranch=main`
+- `-PprojectUrl=https://github.com/<you>/<repo>`
+- `-PreleaseMetadataBranch=main`
 
 The output zip is written to `app/build/distributions/release/`.
-
-## Publishing Notes
-
-If you publish this project, keep explicit upstream credit to the original BCR project and preserve the GPL license and copyright notices.
-
-Because this repository now differs substantially from the original BCR app architecture due to running in a headless mode without a helper app, this is considered a standalone project.
 
 ## License
 

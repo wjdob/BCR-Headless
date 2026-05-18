@@ -1,8 +1,9 @@
-BCR Headless 1.1.0-test.14
+BCR Headless 1.1.0-test.15
 
-- Added a recorder mode selector so users can explicitly choose Stereo or Mono fallback while still seeing the VOICE_CALL capability probe result
-- Updated Prepare Components to offer Stereo or Mono fallback preparation and download only the component set needed for that path
-- Made transcriber readiness and component estimates follow the active recorder mode so the UI no longer implies the wrong model set is required
-- Marked non-selected transcriber models as optional instead of failed or missing during the opposite preparation path
+- Added recorder output format selection for WAV/PCM, OGG/Opus, and M4A/AAC
+- Added automatic audio normalization before transcription so compressed recordings still use the stable whisper diarization path
+- Simplified the WebUI copy and added a recorder format selector
+- Removed unused legacy app component declarations from the manifest
+- Updated the README and project changelog around the current headless module behavior
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.14/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.15/CHANGELOG.md

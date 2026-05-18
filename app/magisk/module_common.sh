@@ -98,7 +98,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -157,14 +157,25 @@ cache_recording_capability_probe() {
         config_set recording.voice_call_stereo_supported 1
         config_set recording.voice_call_probe_status helper_missing
         config_set recording.voice_call_probe_note "Helper APK missing; assuming stereo until probed later"
+        config_set recording.available_formats wav
         return
     fi
 
     probe_output=$(run_helper_foreground recording-capability 2>/dev/null || true)
+    available_formats=$(status_value_from_blob recording.available_formats "${probe_output}")
     detected_mode=$(status_value_from_blob recording.detected_mode "${probe_output}")
     stereo_supported=$(status_value_from_blob recording.voice_call_stereo_supported "${probe_output}")
     probe_status=$(status_value_from_blob recording.voice_call_probe_status "${probe_output}")
     probe_note=$(status_value_from_blob recording.voice_call_probe_note "${probe_output}")
+
+    case "${available_formats}" in
+        *wav*)
+            config_set recording.available_formats "${available_formats}"
+            ;;
+        *)
+            config_set recording.available_formats wav
+            ;;
+    esac
 
     case "${detected_mode}" in
         stereo|mono)
@@ -226,6 +237,21 @@ ensure_defaults() {
             config_set recording.stereo 1
         fi
     fi
+    if ! config_get recording.format >/dev/null 2>&1; then
+        config_set recording.format wav
+    fi
+    if ! config_get recording.available_formats >/dev/null 2>&1; then
+        cache_recording_capability_probe
+    fi
+    current_recording_format=$(config_get_or_default recording.format wav)
+    available_recording_formats=$(config_get_or_default recording.available_formats wav)
+    case ",${available_recording_formats}," in
+        *",${current_recording_format},"*)
+            ;;
+        *)
+            config_set recording.format wav
+            ;;
+    esac
     if ! config_get debug.enabled >/dev/null 2>&1; then
         config_set debug.enabled 0
     fi
@@ -299,7 +325,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -431,6 +457,7 @@ start_daemon() {
     log_enabled=$(bool_string config_is_enabled recording.log_enabled 1)
     notifications_enabled=$(bool_string config_is_enabled notifications.enabled 1)
     stereo_enabled=$(bool_string config_is_enabled recording.stereo 1)
+    recording_format=$(config_get_or_default recording.format wav)
 
     touch "${daemon_log}"
     printf '\n[%s] daemon start\n' "$(component_timestamp)" >> "${daemon_log}"
@@ -439,7 +466,7 @@ start_daemon() {
     # or PackageManager. The daemon's code lives in the helper APK under tools/.
     CLASSPATH="${helper_apk}" app_process / \
         com.chiller3.bcr.headless.HeadlessMain \
-        daemon "${mod_dir}" "${output_dir}" "${min_duration}" "${log_enabled}" "${notifications_enabled}" "${stereo_enabled}" \
+        daemon "${mod_dir}" "${output_dir}" "${min_duration}" "${log_enabled}" "${notifications_enabled}" "${stereo_enabled}" "${recording_format}" \
         >>"${daemon_log}" 2>&1 &
     echo "${!}" > "${pid_file}"
 
@@ -834,7 +861,7 @@ component.whisper_cli.source_kind=${whisper_source_kind}
 component.whisper_cli.source_detail=${whisper_source_detail}
 component.whisper_cli.sha256=
 component.whisper_cli.error=${whisper_initial_error}
-component.base_model.label=Whisper base English model
+component.base_model.label=Whisper model
 component.base_model.status=${base_model_initial_status}
 component.base_model.progress=0
 component.base_model.bytes_downloaded=0
@@ -842,7 +869,7 @@ component.base_model.bytes_total=${default_model_size}
 component.base_model.path=${model_path}
 component.base_model.url=${model_url}
 component.base_model.note=${base_model_note}
-component.tinydiarize_model.label=TinyDiarize speaker model
+component.tinydiarize_model.label=TinyDiarize model
 component.tinydiarize_model.status=${tdrz_model_initial_status}
 component.tinydiarize_model.progress=0
 component.tinydiarize_model.bytes_downloaded=0
@@ -1333,6 +1360,8 @@ print_status() {
     echo "recording.min_duration=$(config_get_or_default recording.min_duration 0)"
     echo "recording.log_enabled=$(bool_string config_is_enabled recording.log_enabled 1)"
     echo "recording.stereo=$(bool_string config_is_enabled recording.stereo 1)"
+    echo "recording.format=$(config_get_or_default recording.format wav)"
+    echo "recording.available_formats=$(config_get_or_default recording.available_formats wav)"
     echo "recording.detected_mode=$(config_get_or_default recording.detected_mode stereo)"
     echo "recording.voice_call_stereo_supported=$(config_get_or_default recording.voice_call_stereo_supported 1)"
     echo "recording.voice_call_probe_status=$(config_get_or_default recording.voice_call_probe_status assumed_stereo)"

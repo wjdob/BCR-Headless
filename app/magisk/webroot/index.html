@@ -12,8 +12,7 @@
             <p class="eyebrow">Test Build • Headless Call Recorder</p>
             <h1>BCR Headless Test</h1>
             <p class="lede">
-                Parallel-install test build for experimental stereo capture,
-                offline transcription, and speaker-labeled transcript queues.
+                Headless call recording with optional offline transcription.
             </p>
             <div class="tabs" role="tablist" aria-label="Views">
                 <button id="recorder-tab" class="tab active" type="button">Recorder</button>
@@ -53,8 +52,7 @@
                     <input id="recording-enabled" type="checkbox">
                 </label>
                 <small class="field-help">
-                    Disabled by default after install. Turn this on and save
-                    changes to arm call recording on this device.
+                    Turn on recording for this device.
                 </small>
 
                 <label class="field toggle-row">
@@ -62,9 +60,7 @@
                     <input id="recording-log-enabled" type="checkbox">
                 </label>
                 <small class="field-help">
-                    Stores a running in-module history of captured calls and
-                    their status. When disabled, Last Output in Status still
-                    tracks the most recent saved recording.
+                    Keep a history of saved recordings in this module.
                 </small>
 
                 <label class="field">
@@ -74,9 +70,7 @@
                         <option value="mono">Mono fallback</option>
                     </select>
                     <small>
-                        Stereo is the default when this device can initialize
-                        VOICE_CALL that way. You can still override it here if
-                        you need the safer mono fallback instead.
+                        Choose the preferred capture mode.
                     </small>
                 </label>
                 <small id="recording-mode-note" class="field-help">
@@ -84,9 +78,19 @@
                 </small>
 
                 <label class="field">
+                    <span>Recording format</span>
+                    <select id="recording-format">
+                        <option value="wav">WAV/PCM</option>
+                        <option value="opus">OGG/Opus</option>
+                        <option value="aac">M4A/AAC</option>
+                    </select>
+                    <small>Compressed formats are converted automatically before transcription.</small>
+                </label>
+
+                <label class="field">
                     <span>Output directory</span>
                     <input id="output-dir" type="text" spellcheck="false">
-                    <small>Plain filesystem path used by the headless recorder.</small>
+                    <small>Folder where recordings are saved.</small>
                 </label>
 
                 <label class="field">
@@ -95,7 +99,7 @@
                         <input id="min-duration" type="number" min="0" step="1">
                         <span>seconds</span>
                     </div>
-                    <small>Shorter recordings are discarded after the call ends.</small>
+                    <small>Discard recordings shorter than this length.</small>
                 </label>
 
                 <div class="actions">
@@ -167,8 +171,7 @@
                     <input id="transcriber-enabled" type="checkbox">
                 </label>
                 <small class="field-help">
-                    Offline experimental feature using a module-local
-                    whisper.cpp CLI and local models.
+                    Offline transcription using local components.
                 </small>
 
                 <label class="field">
@@ -198,13 +201,13 @@
                         <option value="ko">Korean</option>
                         <option value="zh">Chinese</option>
                     </select>
-                    <small>Select the language spoken in the call. Use Auto detect if calls vary.</small>
+                    <small>Choose the language spoken in the recording.</small>
                 </label>
 
                 <label class="field">
                     <span>Your speaker name</span>
                     <input id="transcriber-speaker-self-name" type="text" spellcheck="false" placeholder="Speaker A">
-                    <small>Used for your side of the call transcript. Defaults to Speaker A.</small>
+                    <small>Name used for your side of the call.</small>
                 </label>
 
                 <label class="field">
@@ -220,14 +223,13 @@
                     <input id="transcriber-whisper-local-enabled" type="checkbox">
                 </label>
                 <small class="field-help">
-                    By default, Prepare Components downloads the matching
-                    whisper.cpp CLI for this device automatically.
+                    Leave this off to use the recommended package for this device.
                 </small>
 
                 <label id="transcriber-whisper-local-field" class="field" hidden>
                     <span>Local whisper.cpp CLI package path</span>
                     <input id="transcriber-whisper-local-path" type="text" spellcheck="false" placeholder="/sdcard/Download/whisper-cli-android-arm64-v8a.zip">
-                    <small id="transcriber-whisper-local-status">Optional. Enter a full path only if you want to use your own compiled whisper.cpp CLI package instead of the automatic device-matched download.</small>
+                    <small id="transcriber-whisper-local-status">Optional. Enter a full path only if you want to use your own whisper.cpp CLI package.</small>
                 </label>
 
                 <label class="field">
@@ -238,7 +240,7 @@
                         <option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin">Small English</option>
                         <option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin">Small multilingual</option>
                     </select>
-                    <small>Pick the offline Whisper model to download. English-only models are smaller. Multilingual models are better for non-English calls.</small>
+                    <small>Select the model to use for transcription.</small>
                 </label>
 
                 <label class="field toggle-row">
@@ -249,7 +251,7 @@
                 <label id="transcriber-model-url-field" class="field" hidden>
                     <span>Custom Whisper model URL</span>
                     <input id="transcriber-model-url" type="text" spellcheck="false" placeholder="https://.../ggml-model.bin">
-                    <small>Optional. Use this only if you want to provide your own Whisper model download link instead of choosing one from the list.</small>
+                    <small>Optional. Use your own download link instead of the list above.</small>
                 </label>
 
                 <label class="field">
@@ -257,7 +259,7 @@
                     <select id="transcriber-tdrz-preset">
                         <option value="https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin">Small English TinyDiarize</option>
                     </select>
-                    <small>TinyDiarize is used for best-effort mono speaker turns when stereo side separation is not available.</small>
+                    <small>Used for mono speaker turns when stereo separation is not available.</small>
                 </label>
 
                 <label class="field toggle-row">
@@ -268,7 +270,7 @@
                 <label id="transcriber-tdrz-url-field" class="field" hidden>
                     <span>Custom TinyDiarize model URL</span>
                     <input id="transcriber-tdrz-url" type="text" spellcheck="false" placeholder="https://.../ggml-small.en-tdrz.bin">
-                    <small>Optional. Use this only if you want to provide your own TinyDiarize model download link instead of choosing the standard option above.</small>
+                    <small>Optional. Use your own download link instead of the standard option.</small>
                 </label>
 
                 <label class="field toggle-row">
@@ -276,8 +278,7 @@
                     <input id="transcriber-auto-queue-enabled" type="checkbox">
                 </label>
                 <small class="field-help">
-                    Automatically adds each new saved call recording to the
-                    transcription queue.
+                    Add new recordings to the transcription queue automatically.
                 </small>
 
                 <label id="transcriber-auto-queue-charging-row" class="field toggle-row" hidden>
@@ -285,9 +286,7 @@
                     <input id="transcriber-auto-queue-charging-only" type="checkbox">
                 </label>
                 <small id="transcriber-auto-queue-charging-help" class="field-help" hidden>
-                    If charging stops during an automatically started job, the
-                    current file is restarted later to protect transcript
-                    integrity.
+                    If charging stops, the current job is restarted later to keep the transcript intact.
                 </small>
 
                 <label id="transcriber-auto-queue-delay-field" class="field" hidden>
@@ -296,7 +295,7 @@
                         <input id="transcriber-auto-queue-delay-seconds" type="number" min="0" step="1">
                         <span>seconds</span>
                     </div>
-                    <small>Wait this long after the phone starts charging before automatic transcription begins.</small>
+                    <small>Wait this long after charging starts before automatic transcription begins.</small>
                 </label>
 
                 <div class="dependency-list">
@@ -372,7 +371,7 @@
                     <span>Enable debug tracking</span>
                     <input id="debug-enabled" type="checkbox">
                 </label>
-                <small class="field-help">When disabled, transcriber debug probes and log tails are not polled. Component prep progress still updates while downloads are active.</small>
+                <small class="field-help">Turn this on only when you need troubleshooting details.</small>
                 <div class="actions">
                     <button id="save-debug-button" type="button">Save Debug</button>
                     <button id="refresh-transcriber-debug-button" class="ghost" type="button">Refresh Transcriber Debug</button>
