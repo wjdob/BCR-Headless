@@ -24,7 +24,7 @@ object HeadlessTranscriberComponents {
     private const val HTTP_REDIRECT_LIMIT = 10
     private const val COPY_BUFFER_SIZE = 64 * 1024
     private const val PROGRESS_UPDATE_BYTES = 512 * 1024L
-    private const val HELPER_USER_AGENT = "BCR-Headless-Test/1.1"
+    private const val HELPER_USER_AGENT = "BCR-Headless/1.1"
     private const val PREPARE_PROFILE_STEREO = "stereo"
     private const val PREPARE_PROFILE_MONO = "mono"
 

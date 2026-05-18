@@ -1,18 +1,14 @@
-# BCR Headless Test
+# BCR Headless
 
 <img src="app/images/icon.svg" alt="BCR Headless icon" width="72" />
 
-> Test build: this branch/package is temporarily labeled as `BCR Headless Test`
-> with module id `bcr.headless.test` and version `1.1.0-test.15` so it can be
-> installed beside the original `1.0.0` `bcr.headless` release.
-
-[![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless-Test?sort=semver)](https://github.com/wjdob/BCR-Headless-Test/releases/latest)
-[![license badge](https://img.shields.io/github/license/wjdob/BCR-Headless-Test)](./LICENSE)
+[![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless?sort=semver)](https://github.com/wjdob/BCR-Headless/releases/latest)
+[![license badge](https://img.shields.io/github/license/wjdob/BCR-Headless)](./LICENSE)
 
 BCR Headless is a headless call recorder module for rooted Android devices. It
-keeps recording, state, and optional transcription inside the module directory
-and exposes configuration through a module WebUI instead of a visible companion
-app.
+keeps recording, state, and optional offline transcription inside the module
+directory and exposes configuration through a module WebUI instead of a visible
+companion app.
 
 <img src="app/images/UI1.jpg" alt="WebUI screenshot top section" width="200" />
 <img src="app/images/UI2.jpg" alt="WebUI screenshot lower section" width="200" />
@@ -27,7 +23,7 @@ This project is based on the original BCR project by Andrew Gunnerson
 - Original contributors: see the upstream repository history and contributors
   list
 
-## What This Build Is
+## What Changed From The Original App
 
 This rebuild pivots away from the original system-app architecture:
 
@@ -42,7 +38,7 @@ This rebuild pivots away from the original system-app architecture:
 
 - headless boot-time recorder daemon
 - Magisk and KernelSU module packaging
-- recorder enable/disable from WebUI
+- recorder enable or disable from WebUI
 - output directory selection
 - minimum-duration filtering
 - recorder output format selection:
@@ -131,15 +127,15 @@ the WAV path.
 ## Shell Control
 
 ```bash
-su -c sh /data/adb/modules/bcr.headless.test/action.sh status
-su -c sh /data/adb/modules/bcr.headless.test/action.sh config list
-su -c sh /data/adb/modules/bcr.headless.test/action.sh reset-config
-su -c sh /data/adb/modules/bcr.headless.test/action.sh restart
-su -c sh /data/adb/modules/bcr.headless.test/action.sh probe
-su -c sh /data/adb/modules/bcr.headless.test/action.sh logs
-su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber status
-su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber list
-su -c sh /data/adb/modules/bcr.headless.test/action.sh transcriber enqueue skip /sdcard/Recordings/BCR/example.wav
+su -c sh /data/adb/modules/bcr.headless/action.sh status
+su -c sh /data/adb/modules/bcr.headless/action.sh config list
+su -c sh /data/adb/modules/bcr.headless/action.sh reset-config
+su -c sh /data/adb/modules/bcr.headless/action.sh restart
+su -c sh /data/adb/modules/bcr.headless/action.sh probe
+su -c sh /data/adb/modules/bcr.headless/action.sh logs
+su -c sh /data/adb/modules/bcr.headless/action.sh transcriber status
+su -c sh /data/adb/modules/bcr.headless/action.sh transcriber list
+su -c sh /data/adb/modules/bcr.headless/action.sh transcriber enqueue skip /sdcard/Recordings/BCR/example.wav
 ```
 
 ## Main Configuration Keys
@@ -191,8 +187,7 @@ This rebuild uses its own version line and does not inherit the original BCR
 release numbering.
 
 - `1.0.0` is the first standalone headless release
-- `1.1.0-test.15` is the current temporary parallel-install test build
-- future stable releases continue from the headless rebuild line
+- `1.1.0` is the current release
 
 ## Building
 

@@ -89,7 +89,7 @@ val gitVersionTriple = describeVersion(git)
 val projectVersionMajor = 1
 val projectVersionMinor = 1
 val projectVersionPatch = 0
-val projectVersionSuffix = "test.15"
+val projectVersionSuffix: String? = null
 val gitVersionCode = getVersionCode(
     projectVersionMajor,
     projectVersionMinor,
@@ -105,13 +105,13 @@ val gitVersionName = getVersionName(
 )
 
 val projectUrl = providers.gradleProperty("projectUrl")
-    .orElse("https://github.com/wjdob/BCR-Headless-Test")
+    .orElse("https://github.com/wjdob/BCR-Headless")
     .get()
 val releaseMetadataBranch = providers.gradleProperty("releaseMetadataBranch")
     .orElse("main")
     .get()
-val moduleId = "bcr.headless.test"
-val moduleName = "BCR Headless Test"
+val moduleId = "bcr.headless"
+val moduleName = "BCR Headless"
 val releaseKeystore = providers.environmentVariable("RELEASE_KEYSTORE").orNull
 val hasCustomReleaseSigning = !releaseKeystore.isNullOrBlank()
 
@@ -126,7 +126,7 @@ android {
         // The helper APK is no longer installed as a package. It only provides
         // code for the headless daemon launched from the module directory via
         // app_process, so a stable internal-only id is sufficient here.
-        applicationId = "com.chiller3.bcr.headless.test"
+        applicationId = "com.chiller3.bcr.headless"
         minSdk = 28
         targetSdk = 36
         versionCode = gitVersionCode
@@ -270,7 +270,7 @@ androidComponents.onVariants { variant ->
             props["version"] = "v${variantVersionName.get()}"
             props["versionCode"] = variantVersionCode.get().toString()
             props["author"] = "wjdob"
-            props["description"] = "TEST BUILD | Headless call recorder with offline transcription"
+            props["description"] = "Headless call recorder with offline transcription"
             props["updateJson"] = "${projectUrl}/raw/${releaseMetadataBranch}/app/magisk/updates/${variant.name}/info.json"
 
             outputFile.get().asFile.writeText(

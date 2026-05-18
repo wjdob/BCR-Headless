@@ -1,9 +1,9 @@
-BCR Headless 1.1.0-test.15
+BCR Headless 1.1.0
 
+- Added offline transcription with queued processing, speaker labeling, component preparation, and transcript output in TXT or DOCX
 - Added recorder output format selection for WAV/PCM, OGG/Opus, and M4A/AAC
-- Added automatic audio normalization before transcription so compressed recordings still use the stable whisper diarization path
-- Simplified the WebUI copy and added a recorder format selector
-- Removed unused legacy app component declarations from the manifest
-- Updated the README and project changelog around the current headless module behavior
+- Added automatic audio normalization before transcription so compressed recordings follow the same stable whisper pipeline
+- Added stereo-by-default recording with manual mono fallback override and matching stereo or mono component preparation
+- Improved transcriber progress, diagnostics, queue controls, and update-state preservation
 
-Full project changelog: https://github.com/wjdob/BCR-Headless-Test/blob/v1.1.0-test.15/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.1.0/CHANGELOG.md

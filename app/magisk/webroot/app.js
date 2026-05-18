@@ -1,7 +1,7 @@
 import { exec, moduleInfo, toast } from "./kernelsu.js";
 
-const DEFAULT_MODULE_ID = "bcr.headless.test";
-const DEFAULT_WHISPER_MANIFEST_URL = "https://github.com/wjdob/BCR-Headless-Test/releases/download/transcriber-tools/transcriber-tools.env";
+const DEFAULT_MODULE_ID = "bcr.headless";
+const DEFAULT_WHISPER_MANIFEST_URL = "https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/transcriber-tools.env";
 
 function resolveModuleContext() {
     try {
