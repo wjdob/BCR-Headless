@@ -10,8 +10,12 @@ keeps recording, state, and optional offline transcription inside the module
 directory and exposes configuration through a module WebUI instead of a visible
 companion app.
 
-<img src="app/images/UI1.jpg" alt="WebUI screenshot top section" width="200" />
-<img src="app/images/UI2.jpg" alt="WebUI screenshot lower section" width="200" />
+<p>
+  <img src="app/images/UI1.jpg" alt="WebUI screenshot top section" width="200" />
+  <img src="app/images/UI3.jpg" alt="WebUI screenshot lower section" width="200" />
+  <img src="app/images/UI4.jpg" alt="WebUI screenshot lower section" width="200" />
+  <img src="app/images/UI7.jpg" alt="WebUI screenshot lower section" width="200" />
+</p>
 
 ## Credits
 
@@ -32,7 +36,7 @@ This rebuild pivots away from the original system-app architecture:
 - configuration is stored in module-local files and mirrored into KernelSU
   module config when available
 - the module WebUI is the primary control surface
-- recordings, transcriber queue state, and module logs stay with the module
+- added optional offline transcriber using Whisper.cpp and Whisper/TinyDiarize models
 
 ## Current Features
 
@@ -50,12 +54,12 @@ This rebuild pivots away from the original system-app architecture:
 - optional in-module recording history
 - offline transcription queue with `.txt` and `.docx` output
 - custom self-speaker label in transcripts
-- stereo component preparation or mono-fallback component preparation
+- stereo component preparation or mono-fallback Whisper components preparation
 - automatic normalization of compressed recordings to PCM WAV before whisper
   transcription so diarization stays on the same stable pipeline
 - optional automatic queueing of newly saved recordings
 - optional charging-only auto-start for queued transcription jobs
-- update installs preserve config, recorder history, queue state, and downloaded
+- (QoL) update installs preserve config, recorder history, queue state, and downloaded
   transcriber components
 - debug view for recorder runtime, transcriber state, component status, and logs
 
@@ -83,6 +87,8 @@ This rebuild pivots away from the original system-app architecture:
 
 ### Recorder
 
+<img src="app/images/UI2.jpg" alt="WebUI screenshot lower section" width="200" />
+
 - enable or disable recording
 - choose stereo or mono fallback
 - choose the output format
@@ -91,11 +97,19 @@ This rebuild pivots away from the original system-app architecture:
 
 ### Recordings
 
+<img src="app/images/UI3.jpg" alt="WebUI screenshot lower section" width="200" />
+
 - review saved recording history
 - open saved recordings
 - clear the module recording history
 
 ### Transcriber
+
+<p>
+<img src="app/images/UI4.jpg" alt="WebUI screenshot lower section" width="200" />
+<img src="app/images/UI5.jpg" alt="WebUI screenshot lower section" width="200" />
+<img src="app/images/UI6.jpg" alt="WebUI screenshot lower section" width="200" />
+</p>
 
 - enable or disable offline transcription
 - choose the transcript directory, source language, and transcript format
@@ -105,6 +119,12 @@ This rebuild pivots away from the original system-app architecture:
 - pause, resume, stop, remove, or clear jobs
 
 ### Debug
+
+<p>
+<img src="app/images/UI7.jpg" alt="WebUI screenshot lower section" width="200" />
+<img src="app/images/UI8.jpg" alt="WebUI screenshot lower section" width="200" />
+<img src="app/images/UI9.jpg" alt="WebUI screenshot lower section" width="200" />
+</p>
 
 - enable troubleshooting data only when needed
 - inspect recorder runtime and probe output
@@ -180,6 +200,8 @@ The `Transcriber tools` workflow publishes:
 `Prepare Components` downloads the manifest, chooses the best matching ABI,
 verifies the package when checksums are available, and installs the CLI plus the
 selected model set.
+
+As an option, you may feed your own Whisper.cpp binaries or Whisper/TinyDiarize model URLs in the Transcriber configuration.
 
 ## Versioning
 
