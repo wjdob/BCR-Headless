@@ -1,6 +1,6 @@
 {
-    "zipUrl": "https://github.com/wjdob/BCR-Headless/releases/download/v1.1.0/BCR-Headless-1.1.0-headless.zip",
-    "changelog": "https://github.com/wjdob/BCR-Headless/raw/v1.1.0/app/magisk/updates/release/changelog.txt",
-    "version": "1.1.0",
-    "versionCode": 1010000
+    "zipUrl": "https://github.com/wjdob/BCR-Headless/releases/download/v1.1.1/BCR-Headless-1.1.1-headless.zip",
+    "changelog": "https://github.com/wjdob/BCR-Headless/raw/v1.1.1/app/magisk/updates/release/changelog.txt",
+    "version": "1.1.1",
+    "versionCode": 1010100
 }

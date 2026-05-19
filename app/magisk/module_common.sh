@@ -25,6 +25,9 @@ transcriber_whisper_upload_tmp="${state_dir}/transcriber-whisper-local.upload"
 transcriber_whisper_upload_target_file="${state_dir}/transcriber-whisper-local.target"
 transcriber_whisper_local_package="${state_dir}/transcriber-whisper-local.package"
 transcriber_tools_dir="${mod_dir}/tools/transcriber"
+default_output_dir="/sdcard/Recordings/BCRHeadless"
+legacy_default_output_dir="/sdcard/Recordings/BCR"
+default_transcript_subdir="transcripts"
 default_transcriber_tools_release_base_url="https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools"
 default_whisper_manifest_url="${default_transcriber_tools_release_base_url}/transcriber-tools.env"
 legacy_default_whisper_url="https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/whisper-cli-android-arm64.zip"
@@ -118,6 +121,11 @@ config_get_or_default() {
     fi
 }
 
+default_transcript_dir_for() {
+    transcript_output_dir_base="${1:-$(config_get_or_default output.dir "${default_output_dir}")}"
+    printf '%s/%s' "${transcript_output_dir_base}" "${default_transcript_subdir}"
+}
+
 is_enabled_value() {
     case "$(printf '%s' "${1}" | tr '[:upper:]' '[:lower:]')" in
         1|true|yes|on)
@@ -207,7 +215,7 @@ ensure_defaults() {
         config_set recording.enabled 0
     fi
     if ! config_get output.dir >/dev/null 2>&1; then
-        config_set output.dir /sdcard/Recordings/BCR
+        config_set output.dir "${default_output_dir}"
     fi
     if ! config_get recording.min_duration >/dev/null 2>&1; then
         config_set recording.min_duration 0
@@ -259,8 +267,7 @@ ensure_defaults() {
         config_set transcriber.enabled 0
     fi
     if ! config_get transcriber.output_dir >/dev/null 2>&1; then
-        output_dir=$(config_get_or_default output.dir /sdcard/Recordings/BCR)
-        config_set transcriber.output_dir "${output_dir}/transcripts"
+        config_set transcriber.output_dir "$(default_transcript_dir_for)"
     fi
     if ! config_get transcriber.language >/dev/null 2>&1; then
         config_set transcriber.language en
@@ -378,7 +385,7 @@ refresh_description() {
 
     enabled=$(bool_string config_is_enabled recording.enabled 0)
     running=$(bool_string is_daemon_running)
-    output_dir=$(config_get_or_default output.dir /sdcard/Recordings/BCR)
+    output_dir=$(config_get_or_default output.dir "${default_output_dir}")
     runtime_state=$(runtime_get recorder.state 2>/dev/null || true)
 
     if [ -z "${runtime_state}" ]; then
@@ -452,7 +459,7 @@ start_daemon() {
         return 1
     fi
 
-    output_dir=$(config_get_or_default output.dir /sdcard/Recordings/BCR)
+    output_dir=$(config_get_or_default output.dir "${default_output_dir}")
     min_duration=$(config_get_or_default recording.min_duration 0)
     log_enabled=$(bool_string config_is_enabled recording.log_enabled 1)
     notifications_enabled=$(bool_string config_is_enabled notifications.enabled 1)
@@ -1347,8 +1354,8 @@ clear_transcriber_whisper_local_package() {
 print_status() {
     ensure_dirs
     clear_stale_pid
-    status_output_dir=$(config_get_or_default output.dir /sdcard/Recordings/BCR)
-    status_transcriber_output_dir=$(config_get_or_default transcriber.output_dir "${status_output_dir}/transcripts")
+    status_output_dir=$(config_get_or_default output.dir "${default_output_dir}")
+    status_transcriber_output_dir=$(config_get_or_default transcriber.output_dir "$(default_transcript_dir_for "${status_output_dir}")")
     status_whisper_path=$(config_get_or_default transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli")
     status_model_path=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
     status_tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")

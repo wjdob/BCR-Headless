@@ -88,7 +88,7 @@ val git = Git.open(File(rootDir, ".git"))!!
 val gitVersionTriple = describeVersion(git)
 val projectVersionMajor = 1
 val projectVersionMinor = 1
-val projectVersionPatch = 0
+val projectVersionPatch = 1
 val projectVersionSuffix: String? = null
 val gitVersionCode = getVersionCode(
     projectVersionMajor,

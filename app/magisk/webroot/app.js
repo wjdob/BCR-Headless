@@ -1,6 +1,7 @@
 import { exec, moduleInfo, toast } from "./kernelsu.js";
 
 const DEFAULT_MODULE_ID = "bcr.headless";
+const DEFAULT_OUTPUT_DIR = "/sdcard/Recordings/BCRHeadless";
 const DEFAULT_WHISPER_MANIFEST_URL = "https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/transcriber-tools.env";
 
 function resolveModuleContext() {
@@ -353,10 +354,10 @@ function updateUiFromStatus(values) {
     updateRecordingFormatOptions(values);
     ensureSelectValue(recordingFormat, values["recording.format"] || "wav", "Saved format");
     debugEnabled.checked = values["debug.enabled"] === "1";
-    outputDir.value = values["output.dir"] || "/sdcard/Recordings/BCR";
+    outputDir.value = values["output.dir"] || DEFAULT_OUTPUT_DIR;
     minDuration.value = values["recording.min_duration"] || "0";
     transcriberEnabled.checked = values["transcriber.enabled"] === "1";
-    transcriberOutputDir.value = values["transcriber.output_dir"] || `${outputDir.value || "/sdcard/Recordings/BCR"}/transcripts`;
+    transcriberOutputDir.value = values["transcriber.output_dir"] || `${outputDir.value || DEFAULT_OUTPUT_DIR}/transcripts`;
     ensureSelectValue(transcriberLanguage, values["transcriber.language"] || "en", "Saved language");
     transcriberSpeakerSelfName.value = values["transcriber.speaker_self_name"] || "Speaker A";
     transcriberOutputFormat.value = values["transcriber.output_format"] || "txt";
@@ -399,7 +400,7 @@ function updateUiFromStatus(values) {
     runtimeBadge.classList.toggle("recording", recorderState === "recording");
 
     lastResult.textContent = values["last.result"] || (enabled ? (running ? "Daemon ready" : "Daemon stopped") : "Recording disabled");
-    lastOutput.textContent = values["last.output"] || values["output.dir"] || "/sdcard/Recordings/BCR";
+    lastOutput.textContent = values["last.output"] || values["output.dir"] || DEFAULT_OUTPUT_DIR;
 
     const ordered = Object.keys(values)
         .sort()
@@ -561,7 +562,7 @@ async function refreshAll() {
 
 async function openLastOutputTarget() {
     const lastOutputPath = latestStatus["last.output"]?.trim();
-    const outputDirectory = latestStatus["output.dir"] || outputDir.value.trim() || "/sdcard/Recordings/BCR";
+    const outputDirectory = latestStatus["output.dir"] || outputDir.value.trim() || DEFAULT_OUTPUT_DIR;
 
     if (!lastOutputPath) {
         await openOutputDirectory();
@@ -582,7 +583,7 @@ async function saveConfigAndRestart() {
     const logEnabled = recordingLogEnabled.checked ? "1" : "0";
     const stereoEnabled = recordingMode?.value === PREPARE_PROFILE_MONO ? "0" : "1";
     const format = recordingFormat?.value || "wav";
-    const output = outputDir.value.trim() || "/sdcard/Recordings/BCR";
+    const output = outputDir.value.trim() || DEFAULT_OUTPUT_DIR;
     const duration = String(Math.max(0, Number.parseInt(minDuration.value || "0", 10) || 0));
 
     await run(
@@ -974,7 +975,7 @@ function renderTranscriberQueue(jobs) {
 async function saveTranscriberConfig() {
     const wasEnabled = latestStatus["transcriber.enabled"] === "1";
     const willEnable = transcriberEnabled.checked;
-    const output = transcriberOutputDir.value.trim() || `${outputDir.value.trim() || "/sdcard/Recordings/BCR"}/transcripts`;
+    const output = transcriberOutputDir.value.trim() || `${outputDir.value.trim() || DEFAULT_OUTPUT_DIR}/transcripts`;
     const language = transcriberLanguage.value || "en";
     const speakerSelfName = transcriberSpeakerSelfName.value.trim() || "Speaker A";
     const format = transcriberOutputFormat.value || "txt";

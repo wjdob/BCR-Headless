@@ -1,9 +1,8 @@
-BCR Headless 1.1.0
+BCR Headless 1.1.1
 
-- Added offline transcription with queued processing, speaker labeling, component preparation, and transcript output in TXT or DOCX
-- Added recorder output format selection for WAV/PCM, OGG/Opus, and M4A/AAC
-- Added automatic audio normalization before transcription so compressed recordings follow the same stable whisper pipeline
-- Added stereo-by-default recording with manual mono fallback override and matching stereo or mono component preparation
-- Improved transcriber progress, diagnostics, queue controls, and update-state preservation
+- Changed the default output directory to /sdcard/Recordings/BCRHeadless for fresh installs
+- Preserved existing recording and transcript paths on update
+- Prevented same-second recording filename collisions from overwriting existing files
+- Kept the Transcriber tools helper-assets release out of the repository Latest slot
 
-Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.1.0/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.1.1/CHANGELOG.md

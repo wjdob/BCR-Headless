@@ -1,5 +1,16 @@
 ### Unreleased
 
+### Version 1.1.1
+
+- Changed the default recording output directory to `/sdcard/Recordings/BCRHeadless`
+  so fresh installs no longer reuse the original BCR default path
+- Preserved existing recording and transcript locations on update while keeping
+  reset/default flows aligned with the new BCR Headless directory
+- Hardened recording file creation so same-second filename collisions no longer
+  overwrite an existing call recording
+- Kept the transcriber tools release out of the repository's "Latest" release
+  slot during future helper-asset publishing
+
 ### Version 1.1.0
 
 - Added offline transcription with queued processing, speaker labeling,

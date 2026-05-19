@@ -14,6 +14,7 @@ import com.chiller3.bcr.format.Encoder
 import com.chiller3.bcr.output.CallDirection
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.time.Duration
 import java.time.ZonedDateTime
@@ -64,7 +65,7 @@ class HeadlessRecorderSession(
 
             startedAt = ZonedDateTime.now()
             val stem = buildFileStem(startedAt)
-            outputFile = File(outputDir, "$stem.${recordingFormat.extension}")
+            outputFile = reserveOutputFile(stem)
             println("Recorder session started: output=${outputFile.absolutePath}")
 
             val info = FileOutputStream(outputFile).use { stream ->
@@ -264,6 +265,25 @@ class HeadlessRecorderSession(
         }
 
         return "${TIMESTAMP_FORMAT.format(timestamp)}_${suffix}"
+    }
+
+    private fun reserveOutputFile(stem: String): File {
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            throw IOException("Unable to create output directory: ${outputDir.absolutePath}")
+        }
+
+        for (attempt in 0..9_999) {
+            val collisionSuffix = if (attempt == 0) "" else "-${attempt + 1}"
+            val candidate = File(outputDir, "$stem$collisionSuffix.${recordingFormat.extension}")
+            if (candidate.createNewFile()) {
+                return candidate
+            }
+            if (!candidate.exists()) {
+                throw IOException("Unable to reserve output file: ${candidate.absolutePath}")
+            }
+        }
+
+        throw IOException("Unable to allocate a unique recording filename in ${outputDir.absolutePath}")
     }
 
     companion object {

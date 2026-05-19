@@ -44,6 +44,7 @@ This rebuild pivots away from the original system-app architecture:
 - Magisk and KernelSU module packaging
 - recorder enable or disable from WebUI
 - output directory selection
+- default output directory: `/sdcard/Recordings/BCRHeadless`
 - minimum-duration filtering
 - recorder output format selection:
   - `WAV/PCM`
@@ -155,7 +156,7 @@ su -c sh /data/adb/modules/bcr.headless/action.sh probe
 su -c sh /data/adb/modules/bcr.headless/action.sh logs
 su -c sh /data/adb/modules/bcr.headless/action.sh transcriber status
 su -c sh /data/adb/modules/bcr.headless/action.sh transcriber list
-su -c sh /data/adb/modules/bcr.headless/action.sh transcriber enqueue skip /sdcard/Recordings/BCR/example.wav
+su -c sh /data/adb/modules/bcr.headless/action.sh transcriber enqueue skip /sdcard/Recordings/BCRHeadless/example.wav
 ```
 
 ## Main Configuration Keys
@@ -209,7 +210,7 @@ This rebuild uses its own version line and does not inherit the original BCR
 release numbering.
 
 - `1.0.0` is the first standalone headless release
-- `1.1.0` is the current release
+- `1.1.1` is the current release
 
 ## Building
 

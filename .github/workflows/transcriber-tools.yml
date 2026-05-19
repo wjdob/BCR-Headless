@@ -107,5 +107,6 @@ jobs:
           else
               gh release create "${RELEASE_TAG}" build/transcriber-tools/* \
                   --title "Transcriber tools" \
-                  --notes "Android whisper-cli packages built from ggml-org/whisper.cpp ${WHISPER_REF}."
+                  --notes "Android whisper-cli packages built from ggml-org/whisper.cpp ${WHISPER_REF}." \
+                  --latest=false
           fi

@@ -28,12 +28,12 @@ case "${command}" in
         ensure_defaults
         run_helper_foreground probe \
             "${mod_dir}" \
-            "$(config_get_or_default output.dir /sdcard/Recordings/BCR)"
+            "$(config_get_or_default output.dir "${default_output_dir}")"
         ;;
     open-output-dir)
         ensure_defaults
         run_helper_foreground open-output-dir \
-            "$(config_get_or_default output.dir /sdcard/Recordings/BCR)"
+            "$(config_get_or_default output.dir "${default_output_dir}")"
         ;;
     open-recording)
         shift || true
@@ -67,8 +67,8 @@ case "${command}" in
         subcommand="${2:-status}"
         ensure_defaults
 
-        recording_output_dir=$(config_get_or_default output.dir /sdcard/Recordings/BCR)
-        transcript_output_dir=$(config_get_or_default transcriber.output_dir "${recording_output_dir}/transcripts")
+        recording_output_dir=$(config_get_or_default output.dir "${default_output_dir}")
+        transcript_output_dir=$(config_get_or_default transcriber.output_dir "$(default_transcript_dir_for "${recording_output_dir}")")
         transcriber_language=$(config_get_or_default transcriber.language en)
         transcriber_format=$(config_get_or_default transcriber.output_format txt)
         transcriber_speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")
