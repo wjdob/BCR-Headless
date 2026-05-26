@@ -273,31 +273,6 @@
                     <small>Optional. Use your own download link instead of the standard option.</small>
                 </label>
 
-                <label class="field toggle-row">
-                    <span>Auto-queue new recordings</span>
-                    <input id="transcriber-auto-queue-enabled" type="checkbox">
-                </label>
-                <small class="field-help">
-                    Add new recordings to the transcription queue automatically.
-                </small>
-
-                <label id="transcriber-auto-queue-charging-row" class="field toggle-row" hidden>
-                    <span>Only auto-start while charging</span>
-                    <input id="transcriber-auto-queue-charging-only" type="checkbox">
-                </label>
-                <small id="transcriber-auto-queue-charging-help" class="field-help" hidden>
-                    If charging stops, the current job is restarted later to keep the transcript intact.
-                </small>
-
-                <label id="transcriber-auto-queue-delay-field" class="field" hidden>
-                    <span>Charging start delay</span>
-                    <div class="inline-input">
-                        <input id="transcriber-auto-queue-delay-seconds" type="number" min="0" step="1">
-                        <span>seconds</span>
-                    </div>
-                    <small>Wait this long after charging starts before automatic transcription begins.</small>
-                </label>
-
                 <div class="dependency-list">
                     <div>
                         <span class="label">whisper.cpp CLI</span>
@@ -321,6 +296,7 @@
 
                 <div class="actions">
                     <button id="save-transcriber-button" type="button">Save Transcriber</button>
+                    <button id="open-transcriber-output-button" class="ghost" type="button">Open Transcript Folder</button>
                     <button id="install-transcriber-deps-button" class="ghost" type="button">Prepare Components</button>
                     <button id="remove-transcriber-deps-button" class="ghost danger" type="button">Remove Components</button>
                 </div>

@@ -35,6 +35,13 @@ case "${command}" in
         run_helper_foreground open-output-dir \
             "$(config_get_or_default output.dir "${default_output_dir}")"
         ;;
+    open-transcript-output-dir)
+        ensure_defaults
+        recording_output_dir=$(config_get_or_default output.dir "${default_output_dir}")
+        transcript_output_dir=$(config_get_or_default transcriber.output_dir "$(default_transcript_dir_for "${recording_output_dir}")")
+        run_helper_foreground open-output-dir \
+            "${transcript_output_dir}"
+        ;;
     open-recording)
         shift || true
         path="${*}"
@@ -127,9 +134,6 @@ case "${command}" in
             stop)
                 run_helper_foreground transcriber control "${mod_dir}" stop
                 ;;
-            defer)
-                run_helper_foreground transcriber control "${mod_dir}" defer
-                ;;
             clear)
                 run_helper_foreground transcriber control "${mod_dir}" clear
                 ;;
@@ -217,7 +221,7 @@ case "${command}" in
                 tail -n 200 "${transcriber_log}" 2>/dev/null || true
                 ;;
             *)
-                echo "Usage: $0 transcriber [status|list|enqueue|pause|resume|stop|defer|clear|remove|start-worker|install-deps|components-status|components-refresh-metadata|components-reset|local-whisper|remove-deps|open-transcript|logs]" >&2
+                echo "Usage: $0 transcriber [status|list|enqueue|pause|resume|stop|clear|remove|start-worker|install-deps|components-status|components-refresh-metadata|components-reset|local-whisper|remove-deps|open-transcript|logs]" >&2
                 exit 1
                 ;;
         esac
@@ -285,7 +289,7 @@ case "${command}" in
         esac
         ;;
     *)
-        echo "Usage: $0 [status|start|stop|restart|apply|probe|open-output-dir|open-recording|recording-log|transcriber|logs|defaults|reset-config|config]" >&2
+        echo "Usage: $0 [status|start|stop|restart|apply|probe|open-output-dir|open-transcript-output-dir|open-recording|recording-log|transcriber|logs|defaults|reset-config|config]" >&2
         exit 1
         ;;
 esac

@@ -78,12 +78,6 @@ const transcriberTdrzPreset = document.querySelector("#transcriber-tdrz-preset")
 const transcriberTdrzUrlEnabled = document.querySelector("#transcriber-tdrz-url-enabled");
 const transcriberTdrzUrlField = document.querySelector("#transcriber-tdrz-url-field");
 const transcriberTdrzUrl = document.querySelector("#transcriber-tdrz-url");
-const transcriberAutoQueueEnabled = document.querySelector("#transcriber-auto-queue-enabled");
-const transcriberAutoQueueChargingRow = document.querySelector("#transcriber-auto-queue-charging-row");
-const transcriberAutoQueueChargingHelp = document.querySelector("#transcriber-auto-queue-charging-help");
-const transcriberAutoQueueChargingOnly = document.querySelector("#transcriber-auto-queue-charging-only");
-const transcriberAutoQueueDelayField = document.querySelector("#transcriber-auto-queue-delay-field");
-const transcriberAutoQueueDelaySeconds = document.querySelector("#transcriber-auto-queue-delay-seconds");
 const transcriberEngineState = document.querySelector("#transcriber-engine-state");
 const transcriberQueueState = document.querySelector("#transcriber-queue-state");
 const transcriberWhisperPath = document.querySelector("#transcriber-whisper-path");
@@ -122,6 +116,9 @@ let latestRecordingCandidates = [];
 let componentPollTimer = null;
 let componentPollInFlight = false;
 let activeTabName = "recorder";
+let recordingLogVisibleCount = 120;
+let transcriberRecordingVisibleCount = 120;
+let transcriberQueueVisibleCount = 120;
 const PREPARE_PROFILE_STEREO = "stereo";
 const PREPARE_PROFILE_MONO = "mono";
 
@@ -263,17 +260,6 @@ function syncTranscriberAdvancedFields() {
     if (transcriberTdrzUrlField) {
         transcriberTdrzUrlField.hidden = !transcriberTdrzUrlEnabled?.checked;
     }
-
-    const autoQueueEnabled = !!transcriberAutoQueueEnabled?.checked;
-    if (transcriberAutoQueueChargingRow) {
-        transcriberAutoQueueChargingRow.hidden = !autoQueueEnabled;
-    }
-    if (transcriberAutoQueueChargingHelp) {
-        transcriberAutoQueueChargingHelp.hidden = !autoQueueEnabled;
-    }
-    if (transcriberAutoQueueDelayField) {
-        transcriberAutoQueueDelayField.hidden = !autoQueueEnabled || !transcriberAutoQueueChargingOnly?.checked;
-    }
 }
 
 function getSavedRecorderMode(values = latestStatus) {
@@ -385,9 +371,6 @@ function updateUiFromStatus(values) {
         transcriberTdrzUrl.value = tdrzUrl;
     }
 
-    transcriberAutoQueueEnabled.checked = values["transcriber.auto_queue"] === "1";
-    transcriberAutoQueueChargingOnly.checked = values["transcriber.auto_queue_require_charging"] === "1";
-    transcriberAutoQueueDelaySeconds.value = values["transcriber.auto_queue_charge_delay_seconds"] || "30";
     syncTranscriberAdvancedFields();
     updateRecordingModeNote(values);
     updateTranscriberWhisperLocalStatus(values, latestComponentsStatus);
@@ -473,6 +456,29 @@ function basename(value) {
     return parts[parts.length - 1] || value;
 }
 
+function renderListFooter(listEl, visibleCount, totalCount, onShowMore) {
+    if (totalCount <= visibleCount) {
+        return;
+    }
+
+    const footer = document.createElement("div");
+    footer.className = "entry-list-footer";
+
+    const summary = document.createElement("span");
+    summary.className = "entry-meta secondary";
+    summary.textContent = `Showing ${visibleCount} of ${totalCount}`;
+    footer.appendChild(summary);
+
+    const showMore = document.createElement("button");
+    showMore.type = "button";
+    showMore.className = "ghost compact";
+    showMore.textContent = "Show More";
+    showMore.addEventListener("click", onShowMore);
+    footer.appendChild(showMore);
+
+    listEl.appendChild(footer);
+}
+
 function renderRecordingLog(entries) {
     recordingLogList.textContent = "";
 
@@ -484,9 +490,10 @@ function renderRecordingLog(entries) {
         return;
     }
 
-    for (const entry of entries) {
+    const shown = entries.slice(0, recordingLogVisibleCount);
+    for (const entry of shown) {
         const card = document.createElement("article");
-        card.className = "entry-card";
+        card.className = "entry-card compact";
 
         const head = document.createElement("div");
         head.className = "entry-head";
@@ -520,9 +527,18 @@ function renderRecordingLog(entries) {
             <div><span class="label">Duration</span><strong>${formatDuration(entry.durationSeconds)}</strong></div>
             <div><span class="label">Channels</span><strong>${entry.audioChannels || "Unknown"}</strong></div>
             <div><span class="label">File</span><strong>${basename(entry.outputFile)}</strong></div>
-            <div><span class="label">Path</span><strong>${entry.outputFile || "No file saved"}</strong></div>
-            <div><span class="label">Error</span><strong>${entry.error || "None"}</strong></div>
         `;
+        if (entry.error) {
+            const errorLine = document.createElement("div");
+            errorLine.innerHTML = `<span class="label">Error</span><strong>${entry.error}</strong>`;
+            details.appendChild(errorLine);
+        }
+        if (entry.outputFile) {
+            const pathMeta = document.createElement("div");
+            pathMeta.className = "entry-meta secondary";
+            pathMeta.textContent = entry.outputFile;
+            details.appendChild(pathMeta);
+        }
 
         card.appendChild(head);
         card.appendChild(details);
@@ -536,6 +552,11 @@ function renderRecordingLog(entries) {
 
         recordingLogList.appendChild(card);
     }
+
+    renderListFooter(recordingLogList, shown.length, entries.length, () => {
+        recordingLogVisibleCount += 120;
+        renderRecordingLog(entries);
+    });
 }
 
 async function refreshRecordingLog() {
@@ -549,15 +570,23 @@ async function refreshRecordingLog() {
         return;
     }
 
+    recordingLogVisibleCount = 120;
     renderRecordingLog(entries);
 }
 
-async function refreshAll() {
+async function refreshAll({
+    includeTranscriber = false,
+    includeRecordingLog = activeTabName === "recordings",
+} = {}) {
     await refreshStatus();
-    await refreshRecordingLog();
-    await refreshTranscriberComponentsStatus();
-    await refreshTranscriberStatus();
-    await refreshTranscriberRecordings();
+    if (includeRecordingLog) {
+        await refreshRecordingLog();
+    }
+    if (includeTranscriber) {
+        await refreshTranscriberStatus();
+        await refreshTranscriberComponentsStatus();
+        await refreshTranscriberRecordings();
+    }
 }
 
 async function openLastOutputTarget() {
@@ -599,13 +628,13 @@ async function saveConfigAndRestart() {
     );
 
     toast("Configuration applied");
-    await refreshAll();
+    await refreshAll({ includeTranscriber: activeTabName === "transcriber" });
 }
 
 async function resetDefaults() {
     await run("sh ./action.sh reset-config && sh ./action.sh restart");
     toast("Defaults restored");
-    await refreshAll();
+    await refreshAll({ includeTranscriber: activeTabName === "transcriber" });
 }
 
 async function openOutputDirectory() {
@@ -653,11 +682,11 @@ async function refreshTranscriberComponentsStatus() {
 async function refreshTranscriberRecordings() {
     const raw = await run("sh ./action.sh transcriber list");
     latestRecordingCandidates = JSON.parse(raw || "[]");
+    transcriberRecordingVisibleCount = 120;
     renderTranscriberRecordings(latestRecordingCandidates);
 }
 
 async function refreshTranscriberAll() {
-    await refreshStatus();
     await refreshTranscriberStatus();
     await refreshTranscriberComponentsStatus();
     await refreshTranscriberRecordings();
@@ -727,6 +756,9 @@ function renderTranscriberStatus(status) {
         ? `~${formatEta(runtime.etaSeconds)}`
         : (total ? `${allProgress}%` : "No estimate");
 
+    if (queue.length < transcriberQueueVisibleCount) {
+        transcriberQueueVisibleCount = Math.max(120, queue.length);
+    }
     renderTranscriberQueue(queue);
 }
 
@@ -862,9 +894,10 @@ function renderTranscriberRecordings(recordings) {
         return;
     }
 
-    for (const recording of recordings) {
+    const shown = recordings.slice(0, transcriberRecordingVisibleCount);
+    for (const recording of shown) {
         const card = document.createElement("label");
-        card.className = "entry-card";
+        card.className = "entry-card compact";
 
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
@@ -890,6 +923,11 @@ function renderTranscriberRecordings(recordings) {
         card.appendChild(body);
         transcriberRecordingList.appendChild(card);
     }
+
+    renderListFooter(transcriberRecordingList, shown.length, recordings.length, () => {
+        transcriberRecordingVisibleCount += 120;
+        renderTranscriberRecordings(recordings);
+    });
 }
 
 function renderTranscriberQueue(jobs) {
@@ -903,9 +941,10 @@ function renderTranscriberQueue(jobs) {
         return;
     }
 
-    for (const job of jobs) {
+    const shown = jobs.slice(0, transcriberQueueVisibleCount);
+    for (const job of shown) {
         const card = document.createElement("article");
-        card.className = "entry-card";
+        card.className = "entry-card compact";
 
         const head = document.createElement("div");
         head.className = "entry-head";
@@ -934,9 +973,18 @@ function renderTranscriberQueue(jobs) {
             <div><span class="label">Progress</span><strong>${Number(job.progress || 0)}%</strong></div>
             <div><span class="label">Started</span><strong>${job.startedAt ? formatTimestamp(job.startedAt) : "Not started yet"}</strong></div>
             <div><span class="label">Completed</span><strong>${job.completedAt ? formatTimestamp(job.completedAt) : "Not finished yet"}</strong></div>
-            <div><span class="label">Transcript</span><strong>${job.transcriptPath || "Not written"}</strong></div>
-            <div><span class="label">Error</span><strong>${job.error || "None"}</strong></div>
         `;
+        if (job.error) {
+            const errorLine = document.createElement("div");
+            errorLine.innerHTML = `<span class="label">Error</span><strong>${job.error}</strong>`;
+            details.appendChild(errorLine);
+        }
+        if (job.transcriptPath) {
+            const pathMeta = document.createElement("div");
+            pathMeta.className = "entry-meta secondary";
+            pathMeta.textContent = job.transcriptPath;
+            details.appendChild(pathMeta);
+        }
         card.appendChild(details);
 
         const actions = document.createElement("div");
@@ -970,6 +1018,11 @@ function renderTranscriberQueue(jobs) {
 
         transcriberQueueList.appendChild(card);
     }
+
+    renderListFooter(transcriberQueueList, shown.length, jobs.length, () => {
+        transcriberQueueVisibleCount += 120;
+        renderTranscriberQueue(jobs);
+    });
 }
 
 async function saveTranscriberConfig() {
@@ -989,9 +1042,6 @@ async function saveTranscriberConfig() {
     const tdrzUrl = transcriberTdrzUrlEnabled.checked
         ? transcriberTdrzUrl.value.trim()
         : (transcriberTdrzPreset.value || "");
-    const autoQueue = transcriberAutoQueueEnabled.checked ? "1" : "0";
-    const autoQueueRequireCharging = (transcriberAutoQueueEnabled.checked && transcriberAutoQueueChargingOnly.checked) ? "1" : "0";
-    const autoQueueChargeDelaySeconds = String(Math.max(0, Number.parseInt(transcriberAutoQueueDelaySeconds.value || "30", 10) || 0));
 
     if (transcriberWhisperLocalEnabled.checked && !whisperLocalPath) {
         throw new Error("Enter a local whisper.cpp CLI package path or turn off the local package override.");
@@ -1044,9 +1094,6 @@ async function saveTranscriberConfig() {
             `sh ./action.sh config set transcriber.language ${shellQuote(language)}`,
             `sh ./action.sh config set transcriber.speaker_self_name ${shellQuote(speakerSelfName)}`,
             `sh ./action.sh config set transcriber.output_format ${shellQuote(format)}`,
-            `sh ./action.sh config set transcriber.auto_queue ${autoQueue}`,
-            `sh ./action.sh config set transcriber.auto_queue_require_charging ${autoQueueRequireCharging}`,
-            `sh ./action.sh config set transcriber.auto_queue_charge_delay_seconds ${autoQueueChargeDelaySeconds}`,
             `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(whisperManifestUrl)}`,
             `sh ./action.sh config set transcriber.whisper_url ''`,
             `sh ./action.sh config set transcriber.whisper_local_path ${shellQuote(whisperLocalPath)}`,
@@ -1351,14 +1398,16 @@ function startComponentPolling() {
         componentPollInFlight = true;
         try {
             await refreshTranscriberStatus();
-            await refreshTranscriberComponentsStatus();
+            if (latestComponentsStatus["transcriber.components.running"] === "1") {
+                await refreshTranscriberComponentsStatus();
+            }
         } catch (error) {
             stopComponentPolling();
             rememberDebugError("Component status refresh failed", error);
         } finally {
             componentPollInFlight = false;
         }
-    }, 1500);
+    }, 3000);
 }
 
 function stopComponentPolling() {
@@ -1483,7 +1532,6 @@ transcriberTab.addEventListener("click", async () => {
     setBusy(true);
     try {
         await refreshTranscriberAll();
-        await refreshTranscriberComponentMetadata({ silent: true });
     } catch (error) {
         rememberDebugError("Transcriber tab refresh failed", error);
         toast(String(error.message || error));
@@ -1619,6 +1667,18 @@ document.querySelector("#save-transcriber-button").addEventListener("click", asy
     }
 });
 
+document.querySelector("#open-transcriber-output-button").addEventListener("click", async () => {
+    setBusy(true);
+    try {
+        const output = await run("sh ./action.sh open-transcript-output-dir");
+        toast(output || "Opening transcript folder");
+    } catch (error) {
+        toast(String(error.message || error));
+    } finally {
+        setBusy(false);
+    }
+});
+
 transcriberWhisperLocalPath?.addEventListener("input", () => {
     updateTranscriberWhisperLocalStatus();
 });
@@ -1633,12 +1693,6 @@ transcriberModelUrlEnabled?.addEventListener("change", () => {
     syncTranscriberAdvancedFields();
 });
 transcriberTdrzUrlEnabled?.addEventListener("change", () => {
-    syncTranscriberAdvancedFields();
-});
-transcriberAutoQueueEnabled?.addEventListener("change", () => {
-    syncTranscriberAdvancedFields();
-});
-transcriberAutoQueueChargingOnly?.addEventListener("change", () => {
     syncTranscriberAdvancedFields();
 });
 

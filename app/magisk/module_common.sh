@@ -101,7 +101,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -278,14 +278,16 @@ ensure_defaults() {
     if ! config_get transcriber.speaker_self_name >/dev/null 2>&1; then
         config_set transcriber.speaker_self_name "Speaker A"
     fi
-    if ! config_get transcriber.auto_queue >/dev/null 2>&1; then
-        config_set transcriber.auto_queue 0
+    # Auto-queue and charging-gated transcription were experimental and have
+    # been removed. Clear any leftover config from older builds.
+    if config_get transcriber.auto_queue >/dev/null 2>&1; then
+        config_delete transcriber.auto_queue
     fi
-    if ! config_get transcriber.auto_queue_require_charging >/dev/null 2>&1; then
-        config_set transcriber.auto_queue_require_charging 0
+    if config_get transcriber.auto_queue_require_charging >/dev/null 2>&1; then
+        config_delete transcriber.auto_queue_require_charging
     fi
-    if ! config_get transcriber.auto_queue_charge_delay_seconds >/dev/null 2>&1; then
-        config_set transcriber.auto_queue_charge_delay_seconds 30
+    if config_get transcriber.auto_queue_charge_delay_seconds >/dev/null 2>&1; then
+        config_delete transcriber.auto_queue_charge_delay_seconds
     fi
     if ! config_get transcriber.whisper_path >/dev/null 2>&1; then
         config_set transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli"
@@ -332,7 +334,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -1380,9 +1382,6 @@ print_status() {
     echo "transcriber.language=$(config_get_or_default transcriber.language en)"
     echo "transcriber.output_format=$(config_get_or_default transcriber.output_format txt)"
     echo "transcriber.speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")"
-    echo "transcriber.auto_queue=$(bool_string config_is_enabled transcriber.auto_queue 0)"
-    echo "transcriber.auto_queue_require_charging=$(bool_string config_is_enabled transcriber.auto_queue_require_charging 0)"
-    echo "transcriber.auto_queue_charge_delay_seconds=$(config_get_or_default transcriber.auto_queue_charge_delay_seconds 30)"
     echo "transcriber.whisper_path=${status_whisper_path}"
     echo "transcriber.model_path=${status_model_path}"
     echo "transcriber.tinydiarize_model_path=${status_tdrz_model_path}"

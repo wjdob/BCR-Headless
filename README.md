@@ -58,8 +58,7 @@ This rebuild pivots away from the original system-app architecture:
 - stereo component preparation or mono-fallback Whisper components preparation
 - automatic normalization of compressed recordings to PCM WAV before whisper
   transcription so diarization stays on the same stable pipeline
-- optional automatic queueing of newly saved recordings
-- optional charging-only auto-start for queued transcription jobs
+- manual queue management for transcription jobs
 - (QoL) update installs preserve config, recorder history, queue state, and downloaded
   transcriber components
 - debug view for recorder runtime, transcriber state, component status, and logs

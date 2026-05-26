@@ -13,7 +13,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.os.BatteryManager
 import android.os.Build
 import android.telecom.TelecomManager
 import android.telephony.PhoneStateListener
@@ -38,29 +37,22 @@ class HeadlessDaemon(
     private val config: HeadlessConfig,
 ) : HeadlessRecorderSession.Listener {
     private val stateDir = File(config.moduleDir, ".state")
-    private val configStore = ModuleConfigStore(File(config.moduleDir, ".config"))
     private val statusWriter = StatusWriter(File(stateDir, "runtime.env"))
     private val recordingLogStore = RecordingLogStore(File(stateDir, "recording-log.json"))
     private val telephonyManager = context.getSystemService(TelephonyManager::class.java)
     private val telecomManager = context.getSystemService(TelecomManager::class.java)
     private val notifier = HeadlessNotifier(config.notificationsEnabled)
-    private val actionScript = File(config.moduleDir, "action.sh")
 
     private var previousCallState = TelephonyManager.CALL_STATE_IDLE
     private var recorder: HeadlessRecorderSession? = null
     private var lastPollState = TelephonyManager.CALL_STATE_IDLE
     private var lastPollSource = "poll_uninitialized"
     private var lastKnownCallNumberRaw: String? = null
-    @Volatile private var isCharging = false
-    @Volatile private var autoQueueWorkerOwned = false
 
     private var modernListener: HeadlessCallStateCallback? = null
     private var legacyListener: HeadlessLegacyCallStateListener? = null
     private var broadcastReceiver: HeadlessPhoneStateReceiver? = null
-    private var powerReceiver: HeadlessPowerStateReceiver? = null
     private var poller: Thread? = null
-    private var autoQueueStartThread: Thread? = null
-    private var autoQueueStartGeneration = 0L
 
     fun start() {
         stateDir.mkdirs()
@@ -80,7 +72,6 @@ class HeadlessDaemon(
                 "config.notifications_enabled" to config.notificationsEnabled.toString(),
                 "config.stereo_enabled" to config.stereoEnabled.toString(),
                 "config.recording_format" to config.recordingFormat.configValue,
-                "power.charging" to "0",
                 "telephony.monitor_mode" to "callback+broadcast+poll",
                 "telephony.callback_registered" to "0",
                 "telephony.receiver_registered" to "0",
@@ -93,15 +84,8 @@ class HeadlessDaemon(
         notifier.ensureChannels()
 
         registerPhoneStateReceiver()
-        registerPowerReceiver()
         registerTelephonyListener()
         startPollingFallback()
-        val automationSettings = loadAutomationSettings()
-        if (automationSettings.requiresCharging) {
-            maybeScheduleAutoQueueStart(automationSettings, "daemon_start")
-        } else {
-            startAutoQueueWorkerIfNeeded(automationSettings, "daemon_start")
-        }
     }
 
     private fun registerPhoneStateReceiver() {
@@ -406,10 +390,6 @@ class HeadlessDaemon(
             ),
         )
 
-        if (finalResult.status == HeadlessRecorderSession.Status.Succeeded) {
-            finalResult.outputFile?.let(::maybeAutoQueueRecording)
-        }
-
         when (finalResult.status) {
             HeadlessRecorderSession.Status.Succeeded -> {
                 if (finalResult.outputFile != null) {
@@ -446,15 +426,6 @@ class HeadlessDaemon(
                 return
             }
 
-            handler(intent)
-        }
-    }
-
-    private class HeadlessPowerStateReceiver(
-        private val handler: (Intent) -> Unit,
-    ) : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent?) {
-            intent ?: return
             handler(intent)
         }
     }
@@ -549,266 +520,6 @@ class HeadlessDaemon(
             lastKnownCallNumberRaw = number
             println("Captured active call number via telecom shell snapshot")
         }
-    }
-
-    private fun registerPowerReceiver() {
-        try {
-            val receiver = HeadlessPowerStateReceiver(::onPowerStateChanged)
-            powerReceiver = receiver
-            val filter = IntentFilter().apply {
-                addAction(Intent.ACTION_BATTERY_CHANGED)
-                addAction(Intent.ACTION_POWER_CONNECTED)
-                addAction(Intent.ACTION_POWER_DISCONNECTED)
-            }
-
-            val sticky = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("DEPRECATION")
-                context.registerReceiver(receiver, filter)
-            }
-
-            statusWriter.update(mapOf("power.receiver_registered" to "1"))
-            updateChargingState(sticky?.let(::isChargingIntent) ?: false, "battery_receiver")
-        } catch (e: Exception) {
-            statusWriter.update(
-                mapOf(
-                    "power.receiver_registered" to "0",
-                    "power.receiver_error" to (e.localizedMessage ?: e.javaClass.simpleName),
-                ),
-            )
-            println(
-                "Power-state receiver unavailable on this ROM: " +
-                    (e.localizedMessage ?: e.javaClass.simpleName),
-            )
-        }
-    }
-
-    private fun onPowerStateChanged(intent: Intent) {
-        updateChargingState(
-            isCharging = isChargingIntent(intent),
-            source = intent.action ?: "battery_changed",
-        )
-    }
-
-    private fun isChargingIntent(intent: Intent): Boolean {
-        return when (intent.action) {
-            Intent.ACTION_POWER_CONNECTED -> true
-            Intent.ACTION_POWER_DISCONNECTED -> false
-            else -> {
-                val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-                val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
-                status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                    status == BatteryManager.BATTERY_STATUS_FULL ||
-                    plugged != 0
-            }
-        }
-    }
-
-    private fun updateChargingState(isCharging: Boolean, source: String) {
-        val changed = this.isCharging != isCharging
-        this.isCharging = isCharging
-
-        statusWriter.update(
-            mapOf(
-                "power.charging" to if (isCharging) "1" else "0",
-                "power.last_source" to source,
-            ),
-        )
-
-        val settings = loadAutomationSettings()
-        if (!settings.shouldAutoQueue || !settings.requiresCharging) {
-            return
-        }
-
-        if (isCharging) {
-            maybeScheduleAutoQueueStart(settings, source)
-            return
-        }
-
-        cancelAutoQueueStart()
-        if (changed && autoQueueWorkerOwned) {
-            deferAutoQueueWorker()
-        }
-    }
-
-    private fun maybeAutoQueueRecording(recording: File) {
-        val settings = loadAutomationSettings()
-        if (!settings.shouldAutoQueue) {
-            return
-        }
-
-        val result = HeadlessTranscriber.enqueueRecordings(
-            moduleDir = config.moduleDir,
-            transcriptDir = settings.transcriptDir,
-            language = settings.language,
-            formatName = settings.format,
-            conflictPolicyName = "skip",
-            speakerSelfName = settings.speakerSelfName,
-            recordings = listOf(recording),
-        )
-
-        if (result.queued.isEmpty()) {
-            return
-        }
-
-        println("Auto-queued recording for transcription: ${recording.name}")
-        if (settings.requiresCharging) {
-            maybeScheduleAutoQueueStart(settings, "recording_finished")
-        } else {
-            startAutoQueueWorkerIfNeeded(settings, "recording_finished")
-        }
-    }
-
-    private fun loadAutomationSettings(): TranscriberAutomationSettings {
-        val outputDir = configStore.getOrDefault("output.dir", config.outputDir.absolutePath)
-        return TranscriberAutomationSettings(
-            transcriberEnabled = configStore.getBoolean("transcriber.enabled", false),
-            autoQueueEnabled = configStore.getBoolean("transcriber.auto_queue", false),
-            requiresCharging = configStore.getBoolean("transcriber.auto_queue_require_charging", false),
-            chargeDelaySeconds = configStore.getInt("transcriber.auto_queue_charge_delay_seconds", 30).coerceAtLeast(0),
-            transcriptDir = File(
-                configStore.getOrDefault(
-                    "transcriber.output_dir",
-                    "$outputDir/transcripts",
-                ),
-            ),
-            language = configStore.getOrDefault("transcriber.language", "en"),
-            format = configStore.getOrDefault("transcriber.output_format", "txt"),
-            speakerSelfName = configStore.getOrDefault("transcriber.speaker_self_name", "Speaker A"),
-        )
-    }
-
-    private fun maybeScheduleAutoQueueStart(settings: TranscriberAutomationSettings, source: String) {
-        cancelAutoQueueStart()
-        if (!settings.shouldAutoQueue || !settings.requiresCharging || !isCharging) {
-            return
-        }
-        if (!HeadlessTranscriber.hasPendingJobs(config.moduleDir)) {
-            return
-        }
-
-        val generation = synchronized(this@HeadlessDaemon) {
-            autoQueueStartGeneration += 1
-            autoQueueStartGeneration
-        }
-        val delayMs = settings.chargeDelaySeconds * 1000L
-        autoQueueStartThread = Thread(
-            {
-                try {
-                    if (delayMs > 0L) {
-                        Thread.sleep(delayMs)
-                    }
-                } catch (_: InterruptedException) {
-                    return@Thread
-                }
-
-                val latestGeneration = synchronized(this@HeadlessDaemon) { autoQueueStartGeneration }
-                if (generation != latestGeneration) {
-                    return@Thread
-                }
-
-                val latestSettings = loadAutomationSettings()
-                if (!latestSettings.shouldAutoQueue || !latestSettings.requiresCharging || !isCharging) {
-                    return@Thread
-                }
-                if (!HeadlessTranscriber.hasPendingJobs(config.moduleDir)) {
-                    return@Thread
-                }
-
-                println("Starting transcriber worker after charging delay from $source")
-                startAutoQueueWorkerIfNeeded(latestSettings, source)
-            },
-            "HeadlessTranscriberAutoQueueStart",
-        ).apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    private fun cancelAutoQueueStart() {
-        synchronized(this@HeadlessDaemon) {
-            autoQueueStartGeneration += 1
-        }
-        autoQueueStartThread?.interrupt()
-        autoQueueStartThread = null
-    }
-
-    private fun startAutoQueueWorkerIfNeeded(settings: TranscriberAutomationSettings, source: String) {
-        if (!settings.shouldAutoQueue) {
-            return
-        }
-        if (settings.requiresCharging && !isCharging) {
-            return
-        }
-        if (!actionScript.isFile) {
-            println("Unable to start transcriber worker automatically: missing ${actionScript.absolutePath}")
-            return
-        }
-        if (!HeadlessTranscriber.hasPendingJobs(config.moduleDir)) {
-            autoQueueWorkerOwned = false
-            return
-        }
-        if (HeadlessTranscriber.hasRunningJobs(config.moduleDir)) {
-            autoQueueWorkerOwned = false
-            return
-        }
-
-        val result = ShellCommandRunner.run(
-            "sh",
-            actionScript.absolutePath,
-            "transcriber",
-            "start-worker",
-            timeoutMs = 10_000,
-        )
-        if (result.exitCode == 0) {
-            autoQueueWorkerOwned = settings.requiresCharging
-            println("Started transcriber worker automatically via $source")
-        } else {
-            autoQueueWorkerOwned = false
-            println(
-                "Automatic transcriber worker start failed: " +
-                    result.stderr.ifBlank { result.stdout }.ifBlank { "unknown error" },
-            )
-        }
-    }
-
-    private fun deferAutoQueueWorker() {
-        if (!actionScript.isFile) {
-            autoQueueWorkerOwned = false
-            return
-        }
-
-        val result = ShellCommandRunner.run(
-            "sh",
-            actionScript.absolutePath,
-            "transcriber",
-            "defer",
-            timeoutMs = 10_000,
-        )
-        if (result.exitCode == 0) {
-            println("Deferred transcriber worker until charging resumes")
-        } else {
-            println(
-                "Unable to defer transcriber worker cleanly: " +
-                    result.stderr.ifBlank { result.stdout }.ifBlank { "unknown error" },
-            )
-        }
-        autoQueueWorkerOwned = false
-    }
-
-    private data class TranscriberAutomationSettings(
-        val transcriberEnabled: Boolean,
-        val autoQueueEnabled: Boolean,
-        val requiresCharging: Boolean,
-        val chargeDelaySeconds: Int,
-        val transcriptDir: File,
-        val language: String,
-        val format: String,
-        val speakerSelfName: String,
-    ) {
-        val shouldAutoQueue: Boolean
-            get() = transcriberEnabled && autoQueueEnabled
     }
 
     companion object {

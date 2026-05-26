@@ -1,5 +1,8 @@
 ### Unreleased
 
+- Removed experimental auto-queue, charging-gated start, and charge-delay
+  automation for transcription jobs; queueing and job starts are manual again
+
 ### Version 1.1.1
 
 - Changed the default recording output directory to `/sdcard/Recordings/BCRHeadless`
