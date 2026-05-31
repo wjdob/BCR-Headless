@@ -1,7 +1,14 @@
 ### Unreleased
 
+### Version 1.1.2
+
 - Removed experimental auto-queue, charging-gated start, and charge-delay
   automation for transcription jobs; queueing and job starts are manual again
+- Added an `Open Transcript Folder` action in Transcriber settings
+- Made Recordings and Transcriber lists denser and more scalable for large
+  histories and queues
+- Reduced WebUI refresh overhead to improve responsiveness by avoiding
+  unnecessary root-status polling on inactive tabs
 
 ### Version 1.1.1
 

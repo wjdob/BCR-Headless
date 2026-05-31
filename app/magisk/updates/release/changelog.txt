@@ -1,8 +1,7 @@
-BCR Headless 1.1.1
+BCR Headless 1.1.2
 
-- Changed the default output directory to /sdcard/Recordings/BCRHeadless for fresh installs
-- Preserved existing recording and transcript paths on update
-- Prevented same-second recording filename collisions from overwriting existing files
-- Kept the Transcriber tools helper-assets release out of the repository Latest slot
+- Removed experimental auto-queue, charging-gated start, and charging delay automation for transcription jobs
+- Added a direct "Open Transcript Folder" action in Transcriber settings
+- Improved list density and responsiveness for Recordings and Transcriber views
 
-Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.1.1/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.1.2/CHANGELOG.md

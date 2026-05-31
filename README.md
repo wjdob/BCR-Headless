@@ -209,7 +209,7 @@ This rebuild uses its own version line and does not inherit the original BCR
 release numbering.
 
 - `1.0.0` is the first standalone headless release
-- `1.1.1` is the current release
+- `1.1.2` is the current release
 
 ## Building
 
