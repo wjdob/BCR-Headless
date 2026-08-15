@@ -5,6 +5,5 @@ tools/transcriber/whisper-cli
 .state/transcriber-runtime.json
 .state/transcriber-components.env
 .state/transcriber-tools.env
-.state/transcriber-whisper-local.package
 .state/daemon.log
 .state/transcriber.log

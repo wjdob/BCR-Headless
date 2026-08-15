@@ -28,7 +28,7 @@ const recordings = Array.from({ length: 96 }, (_, index) => {
 
 const status = {
     "module.id": "bcr.headless",
-    "module.version": "1.3.0-test.1",
+    "module.version": "1.3.0-test.2",
     "recording.enabled": "1",
     "recording.log_enabled": "1",
     "recording.stereo": "1",
@@ -58,7 +58,6 @@ const status = {
     "transcriber.speaker_self_name": "Speaker A",
     "transcriber.speaker_remote_name": "Speaker B",
     "transcriber.whisper_manifest_url": "https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/transcriber-tools.env",
-    "transcriber.whisper_local_path": "",
     "transcriber.model_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
     "transcriber.tinydiarize_model_url": "https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin",
 };
@@ -205,7 +204,8 @@ function recordingPage(params) {
     else items.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
     const offset = Number(params.offset || 0);
     const limit = Number(params.limit || 40);
-    return { total: items.length, offset, limit, items: items.slice(offset, offset + limit), hasMore: offset + limit < items.length };
+    const pageItems = items.slice(offset, offset + limit).map((item) => params.channel === "all" ? { ...item, audioChannels: null } : { ...item });
+    return { total: items.length, offset, limit, items: pageItems, hasMore: offset + limit < items.length };
 }
 
 function updateMockProgress() {

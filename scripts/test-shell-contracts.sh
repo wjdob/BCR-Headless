@@ -30,7 +30,7 @@ prepare_module() {
     touch "${module_dir}/tools/bcr-headless.apk"
     cat > "${module_dir}/module.prop" <<'EOF'
 id=bcr.headless
-version=v1.3.0-test.1
+version=v1.3.0-test.2
 EOF
 }
 
@@ -53,6 +53,28 @@ case " \$* " in
 esac
 EOF
 chmod +x "${fake_bin}/app_process"
+
+config_module="${temp_dir}/config-module"
+config_bin="${temp_dir}/config-bin"
+ksud_calls="${temp_dir}/ksud-calls"
+prepare_module "${config_module}"
+mkdir -p "${config_bin}"
+cat > "${config_bin}/ksud" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${ksud_calls}"
+if [[ "\${1:-}" == module && "\${2:-}" == config && "\${3:-}" == get ]]; then
+    printf 'native-%s' "\${4:-unknown}"
+fi
+EOF
+chmod +x "${config_bin}/ksud"
+printf 'local-output' > "${config_module}/.config/output.dir"
+config_value=$(PATH="${config_bin}:${fake_bin}:${PATH}" sh "${config_module}/action.sh" config get output.dir)
+[[ "${config_value}" == local-output ]] || fail 'local config mirror was not preferred'
+[[ ! -e "${ksud_calls}" ]] || fail 'ksud was invoked for a locally mirrored setting'
+rm -f "${config_module}/.config/output.dir"
+config_value=$(PATH="${config_bin}:${fake_bin}:${PATH}" sh "${config_module}/action.sh" config get output.dir)
+[[ "${config_value}" == native-output.dir ]] || fail 'KernelSU config fallback was not read'
+[[ $(cat "${config_module}/.config/output.dir") == native-output.dir ]] || fail 'KernelSU fallback was not cached locally'
 
 runtime_module="${temp_dir}/runtime-module"
 media_dir="${temp_dir}/media"
@@ -88,6 +110,11 @@ printf '0' > "${legacy_module}/.config/output.write_metadata"
 printf '1' > "${legacy_module}/.config/transcriber.auto_queue"
 printf '1' > "${legacy_module}/.config/transcriber.auto_queue_require_charging"
 printf '30' > "${legacy_module}/.config/transcriber.auto_queue_charge_delay_seconds"
+printf '/sdcard/Download/custom-whisper.zip' > "${legacy_module}/.config/transcriber.whisper_local_path"
+printf 'https://example.invalid/whisper-cli.zip' > "${legacy_module}/.config/transcriber.whisper_url"
+printf 'https://example.invalid/tools.env' > "${legacy_module}/.config/transcriber.whisper_manifest_url"
+printf 'https://example.invalid/model.bin' > "${legacy_module}/.config/transcriber.model_url"
+printf 'https://example.invalid/tdrz.bin' > "${legacy_module}/.config/transcriber.tinydiarize_model_url"
 PATH="${fake_bin}:${PATH}" sh "${legacy_module}/action.sh" ui-snapshot recorder > /dev/null
 
 legacy_actual="${temp_dir}/legacy-config.actual"
@@ -100,6 +127,12 @@ diff -u "${fixtures_dir}/legacy-config.expected" "${legacy_actual}"
 for removed in transcriber.auto_queue transcriber.auto_queue_require_charging transcriber.auto_queue_charge_delay_seconds; do
     [[ ! -e "${legacy_module}/.config/${removed}" ]] || fail "legacy key ${removed} was not removed"
 done
+for removed in transcriber.whisper_local_path transcriber.whisper_url; do
+    [[ ! -e "${legacy_module}/.config/${removed}" ]] || fail "unsupported source key ${removed} was not removed"
+done
+[[ $(cat "${legacy_module}/.config/transcriber.whisper_manifest_url") == 'https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/transcriber-tools.env' ]] || fail 'manifest source was not restored'
+[[ $(cat "${legacy_module}/.config/transcriber.model_url") == 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin' ]] || fail 'Whisper model source was not restored'
+[[ $(cat "${legacy_module}/.config/transcriber.tinydiarize_model_url") == 'https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin' ]] || fail 'TinyDiarize source was not restored'
 
 modules_root="${temp_dir}/modules"
 current_module="${modules_root}/bcr.headless"
@@ -110,7 +143,7 @@ mkdir -p "${current_module}/.config" "${current_module}/.state" \
 cp "${root_dir}/app/magisk/customize.sh" "${staged_module}/customize.sh"
 cat > "${staged_module}/module.prop" <<'EOF'
 id=bcr.headless
-version=v1.3.0-test.1
+version=v1.3.0-test.2
 EOF
 printf '%s' "${user_media}" > "${current_module}/.config/output.dir"
 printf 'native-cli' > "${current_module}/tools/transcriber/whisper-cli"
@@ -119,7 +152,6 @@ printf 'queue-state' > "${current_module}/.state/transcriber-queue.json"
 printf 'runtime-state' > "${current_module}/.state/transcriber-runtime.json"
 printf 'component-state' > "${current_module}/.state/transcriber-components.env"
 printf 'manifest-state' > "${current_module}/.state/transcriber-tools.env"
-printf 'local-package' > "${current_module}/.state/transcriber-whisper-local.package"
 printf 'daemon-log' > "${current_module}/.state/daemon.log"
 printf 'transcriber-log' > "${current_module}/.state/transcriber.log"
 printf 'keep recording' > "${user_media}/call.wav"

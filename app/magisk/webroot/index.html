@@ -14,7 +14,7 @@
                 <span class="brand-icon" data-icon="phone-call" aria-hidden="true"></span>
                 <span>
                     <strong>BCR Headless</strong>
-                    <small id="module-version">1.3.0-test.1</small>
+                    <small id="module-version">1.3.0-test.2</small>
                 </span>
             </div>
             <nav class="primary-nav" role="tablist" aria-orientation="vertical">
@@ -75,11 +75,12 @@
                         </div>
                     </section>
 
-                    <section class="content-section settings-section" aria-labelledby="recorder-settings-title">
-                        <div class="section-heading">
-                            <div><p class="kicker">Configuration</p><h2 id="recorder-settings-title">Recorder settings</h2></div>
-                            <button id="reset-recorder-button" class="text-button secondary" type="button"><span data-icon="rotate-ccw" aria-hidden="true"></span>Reset</button>
-                        </div>
+                    <details id="recorder-settings" class="content-section settings-details" aria-labelledby="recorder-settings-title">
+                        <summary>
+                            <span><span data-icon="settings" aria-hidden="true"></span><span><span class="kicker">Configuration</span><strong id="recorder-settings-title">Recorder settings</strong></span></span>
+                            <span data-icon="chevron-down" aria-hidden="true"></span>
+                        </summary>
+                        <div class="details-actions"><button id="reset-recorder-button" class="text-button secondary" type="button"><span data-icon="rotate-ccw" aria-hidden="true"></span>Reset</button></div>
                         <div class="settings-list">
                             <label class="setting-row toggle-setting">
                                 <span><strong>Recording</strong><small>Capture supported calls in the background.</small></span>
@@ -113,7 +114,7 @@
                                 <span class="number-field"><input id="min-duration" type="number" min="0" step="1"><span>sec</span></span>
                             </label>
                         </div>
-                    </section>
+                    </details>
                 </section>
 
                 <section id="library-view" class="view" role="tabpanel" aria-label="Library" hidden>
@@ -122,9 +123,6 @@
                             <label class="search-field"><span data-icon="search" aria-hidden="true"></span><input id="library-search" type="search" placeholder="Search recordings" autocomplete="off" aria-label="Search recordings"></label>
                             <select id="library-transcript-filter" aria-label="Filter by transcript">
                                 <option value="all">All transcripts</option><option value="ready">Has transcript</option><option value="missing">No transcript</option>
-                            </select>
-                            <select id="library-channel-filter" aria-label="Filter by channels">
-                                <option value="all">All channels</option><option value="stereo">Stereo</option><option value="mono">Mono</option>
                             </select>
                             <select id="library-sort" aria-label="Sort recordings">
                                 <option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Filename</option><option value="largest">Largest first</option><option value="smallest">Smallest first</option>
@@ -176,13 +174,15 @@
                     <section class="content-section" aria-labelledby="source-recordings-title">
                         <div class="section-heading">
                             <div><p class="kicker">Add jobs</p><h2 id="source-recordings-title">Recordings</h2></div>
-                            <button id="transcriber-select-page-button" class="text-button secondary" type="button">Select page</button>
                         </div>
                         <label class="search-field compact-search"><span data-icon="search" aria-hidden="true"></span><input id="transcriber-search" type="search" placeholder="Search recordings" autocomplete="off" aria-label="Search recordings for transcription"></label>
                         <div id="transcriber-recording-list" class="data-list compact-list"></div>
                         <div class="section-footer">
                             <span id="transcriber-selection-count">0 selected</span>
-                            <button id="queue-selected-button" class="text-button" type="button"><span data-icon="list-plus" aria-hidden="true"></span>Add to queue</button>
+                            <div class="footer-actions">
+                                <button id="transcriber-select-page-button" class="text-button secondary" type="button">Select page</button>
+                                <button id="queue-selected-button" class="text-button" type="button"><span data-icon="list-plus" aria-hidden="true"></span>Add selected</button>
+                            </div>
                         </div>
                     </section>
 
@@ -205,22 +205,11 @@
                             <label class="setting-row input-setting"><span><strong>Other speaker name</strong><small>Label for the remote side of stereo calls.</small></span><input id="transcriber-speaker-remote-name" type="text" placeholder="Speaker B"></label>
                             <label class="setting-row input-setting"><span><strong>Transcript format</strong><small>Choose a readable document, subtitle, or structured export.</small></span><select id="transcriber-output-format"><option value="txt">Plain text (.txt)</option><option value="docx">Word document (.docx)</option><option value="srt">SubRip subtitles (.srt)</option><option value="vtt">WebVTT subtitles (.vtt)</option><option value="json">Structured data (.json)</option></select></label>
                             <label class="setting-row input-setting"><span><strong>Whisper model</strong><small id="model-compatibility-note">Choose an English or multilingual model.</small></span><select id="transcriber-model-preset"><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin">Base English</option><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin">Base multilingual</option><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin">Small English</option><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin">Small multilingual</option></select></label>
-                            <details class="advanced-settings">
-                                <summary>Advanced component sources</summary>
-                                <label class="toggle-setting compact-toggle"><span><strong>Use a local whisper.cpp package</strong><small>Optional. Provide your own compiled CLI package.</small></span><input id="transcriber-whisper-local-enabled" type="checkbox" role="switch"></label>
-                                <label id="transcriber-whisper-local-field" class="stacked-field" hidden><span>Local package path</span><input id="transcriber-whisper-local-path" type="text" spellcheck="false" placeholder="/sdcard/Download/whisper-cli.zip"></label>
-                                <label class="toggle-setting compact-toggle"><span><strong>Use a custom Whisper model URL</strong></span><input id="transcriber-model-url-enabled" type="checkbox" role="switch"></label>
-                                <label id="transcriber-model-url-field" class="stacked-field" hidden><span>Whisper model URL</span><input id="transcriber-model-url" type="url" spellcheck="false"></label>
-                                <label class="input-setting compact-input"><span><strong>TinyDiarize model</strong><small>Required for mono speaker turns.</small></span><select id="transcriber-tdrz-preset"><option value="https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin">Small English TinyDiarize</option></select></label>
-                                <label class="toggle-setting compact-toggle"><span><strong>Use a custom TinyDiarize URL</strong></span><input id="transcriber-tdrz-url-enabled" type="checkbox" role="switch"></label>
-                                <label id="transcriber-tdrz-url-field" class="stacked-field" hidden><span>TinyDiarize model URL</span><input id="transcriber-tdrz-url" type="url" spellcheck="false"></label>
-                            </details>
                         </div>
                     </details>
                 </section>
 
                 <section id="diagnostics-view" class="view" role="tabpanel" aria-label="Diagnostics" hidden>
-                    <div id="health-grid" class="health-grid"></div>
                     <section class="content-section" aria-labelledby="diagnostic-controls-title">
                         <div class="section-heading"><div><p class="kicker">Troubleshooting</p><h2 id="diagnostic-controls-title">Diagnostics</h2></div></div>
                         <label class="setting-row toggle-setting"><span><strong>Debug tracking</strong><small>Enable only while gathering troubleshooting details.</small></span><input id="debug-enabled" type="checkbox" role="switch"></label>
@@ -240,7 +229,7 @@
                     <details class="content-section diagnostic-details">
                         <summary>Component status</summary><pre id="raw-components-output">No component details loaded.</pre>
                     </details>
-                    <details class="content-section diagnostic-details" open>
+                    <details id="diagnostic-result-details" class="content-section diagnostic-details" hidden>
                         <summary>Diagnostic output</summary><pre id="diagnostic-output">No diagnostics requested.</pre>
                     </details>
                 </section>

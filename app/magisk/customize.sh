@@ -55,7 +55,6 @@ preserve_existing_state() {
         transcriber-runtime.json \
         transcriber-components.env \
         transcriber-tools.env \
-        transcriber-whisper-local.package \
         daemon.log \
         transcriber.log; do
         copy_file_preserve "${current_modpath}/.state/${state_file}" "${MODPATH}/.state/${state_file}" || true

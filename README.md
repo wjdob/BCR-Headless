@@ -56,7 +56,7 @@ runtime and WebUI:
 - stereo channel separation and best-effort mono TinyDiarize labeling
 - temporary PCM normalization for compressed recordings
 - component preparation matched to stereo or mono-fallback operation
-- lightweight health summaries and on-demand diagnostics
+- on-demand diagnostics with debug tracking disabled by default
 - in-place update preservation for configuration, history, queue state, logs,
   downloaded components, recordings, and transcripts
 - atomic transcript publication so interrupted work cannot replace a valid file
@@ -96,9 +96,9 @@ editable settings.
 
 <img src="app/images/webui-library.png" alt="Searchable recording library" width="720" />
 
-The Library provides server-side search, filtering, sorting, paging, persistent
-selection, transcript status, recording actions, queue actions, and transcript
-preview.
+The Library provides fast server-side search, transcript filtering, sorting,
+paging, persistent selection, recording actions, inline queue actions, and
+transcript preview.
 
 ### Transcribe
 
@@ -114,8 +114,9 @@ troubleshooting.
 
 <img src="app/images/webui-diagnostics.png" alt="On-demand diagnostics" width="720" />
 
-Diagnostics loads a small health summary first. Debug tracking is off by
-default, and raw status, logs, and probes are requested only when opened.
+Diagnostics keeps troubleshooting controls and raw details out of the primary
+workflow. Debug tracking is off by default; probe and log output appears only
+when requested.
 
 ## Transcriber Components
 
@@ -129,8 +130,7 @@ The repository-owned `Transcriber tools` workflow builds Android CLI packages
 for supported ABIs. Its pinned Whisper.cpp source and build matrix are stored in
 `scripts/transcriber-tools.env`. Preparation reads the release manifest,
 selects the matching package, verifies available checksums, and installs only
-the chosen model set. Advanced settings can instead use a locally supplied CLI
-package or alternate model URLs.
+the chosen model set. Component sources are curated by the module.
 
 ## Shell Control
 
@@ -170,8 +170,6 @@ Run the action script without arguments to display the complete command list.
 - `transcriber.model_path`
 - `transcriber.tinydiarize_model_path`
 - `transcriber.whisper_manifest_url`
-- `transcriber.whisper_local_path`
-- `transcriber.whisper_url`
 - `transcriber.model_url`
 - `transcriber.tinydiarize_model_url`
 
@@ -182,7 +180,7 @@ release numbering.
 
 - `1.0.0` is the first standalone headless release
 - `1.1.2` is the current public release
-- `1.3.0-test.1` is the private draft test build for the WebUI and transcriber
+- `1.3.0-test.2` is the private draft test build for the WebUI and transcriber
   overhaul
 
 Test builds retain module ID `bcr.headless` so they exercise the real update

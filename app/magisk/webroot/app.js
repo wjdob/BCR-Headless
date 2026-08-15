@@ -4,12 +4,14 @@ import { badge, element, iconButton, renderIcons, requestChoice, setPending, sho
 
 const DEFAULT_OUTPUT_DIR = "/sdcard/Recordings/BCRHeadless";
 const DEFAULT_MANIFEST_URL = "https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/transcriber-tools.env";
+const DEFAULT_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
+const DEFAULT_TINYDIARIZE_URL = "https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin";
 const COMPONENT_KEYS = ["whisper_cli", "base_model", "tinydiarize_model"];
 const VIEW_INFO = {
     recorder: { title: "Recorder", kicker: "Call recording" },
     library: { title: "Library", kicker: "Saved calls" },
     transcriber: { title: "Transcribe", kicker: "Offline processing" },
-    diagnostics: { title: "Diagnostics", kicker: "Module health" },
+    diagnostics: { title: "Diagnostics", kicker: "Support tools" },
 };
 const LANGUAGES = [
     ["en", "English"], ["auto", "Auto detect"], ["es", "Spanish"], ["fr", "French"], ["de", "German"],
@@ -178,7 +180,7 @@ function applySnapshot(view, snapshot, forceForm) {
     if (view === "recorder") renderRecorder();
     if (view === "library") renderLibrary();
     if (view === "transcriber") renderTranscriber();
-    if (view === "diagnostics") renderDiagnostics(snapshot);
+    if (view === "diagnostics") renderDiagnostics();
 }
 
 function renderGlobalStatus() {
@@ -189,7 +191,7 @@ function renderGlobalStatus() {
     const pill = $("#global-status");
     pill.replaceChildren(element("span", { className: "status-dot" }), document.createTextNode(label));
     pill.className = `status-pill status-${!enabled ? "neutral" : running ? "success" : "danger"}`;
-    $("#module-version").textContent = status["module.version"] || (IS_MOCK ? "1.3.0-test.1 mock" : "1.3.0-test.1");
+    $("#module-version").textContent = status["module.version"] || (IS_MOCK ? "1.3.0-test.2 mock" : "1.3.0-test.2");
 }
 
 function renderRecorder() {
@@ -233,15 +235,17 @@ function recordingLogFor(path) {
     return appState.recordingLog.find((entry) => entry.output === path || entry.path === path) || null;
 }
 
-function makeRecordingRow(recording, { compact = false } = {}) {
+function makeRecordingRow(recording, { compact = false, queueAction = false } = {}) {
     const row = element("article", { className: "data-row" });
     const selectLabel = element("label", { className: "row-select", title: `Select ${recording.name}` });
     const checkbox = element("input", { type: "checkbox", attributes: { "aria-label": `Select ${recording.name}` } });
     checkbox.value = recording.path;
     checkbox.checked = appState.selectedRecordings.has(recording.path);
+    row.classList.toggle("is-selected", checkbox.checked);
     checkbox.addEventListener("change", () => {
         if (checkbox.checked) appState.selectedRecordings.add(recording.path);
         else appState.selectedRecordings.delete(recording.path);
+        row.classList.toggle("is-selected", checkbox.checked);
         rememberSelection();
         updateSelectionUi();
     });
@@ -254,8 +258,9 @@ function makeRecordingRow(recording, { compact = false } = {}) {
     meta.append(
         element("span", { text: formatDate(recording.modifiedAt) }),
         element("span", { text: formatBytes(recording.sizeBytes) }),
-        element("span", { text: Number(recording.audioChannels) >= 2 ? "Stereo" : Number(recording.audioChannels) === 1 ? "Mono" : "Channels unknown" }),
     );
+    if (Number(recording.audioChannels) >= 2) meta.appendChild(element("span", { text: "Stereo" }));
+    else if (Number(recording.audioChannels) === 1) meta.appendChild(element("span", { text: "Mono" }));
     if (log?.direction) meta.appendChild(element("span", { text: titleCase(log.direction) }));
     if (Number.isFinite(Number(log?.duration))) meta.appendChild(element("span", { text: formatElapsed(0, Number(log.duration) * 1000) }));
     main.appendChild(meta);
@@ -268,6 +273,13 @@ function makeRecordingRow(recording, { compact = false } = {}) {
     const openRecording = iconButton("play", "Open recording");
     openRecording.addEventListener("click", () => withPending(openRecording, () => run(`sh ./action.sh open-recording ${shellQuote(recording.path)}`), "Opening"));
     actions.appendChild(openRecording);
+    if (queueAction) {
+        const alreadyQueued = appState.activeView === "transcriber" && (appState.transcriber?.queue?.jobs || []).some((job) => job.recordingPath === recording.path && ["queued", "running"].includes(job.status));
+        const queue = iconButton("captions", alreadyQueued ? "Already in transcription queue" : "Add to transcription queue");
+        queue.disabled = alreadyQueued || appState.status["transcriber.enabled"] !== "1";
+        queue.addEventListener("click", () => queueRecordings([recording.path], queue, { knownRecordings: [recording] }));
+        actions.appendChild(queue);
+    }
     if (recording.selectedTranscriptExists) {
         const preview = iconButton("eye", "Preview transcript");
         preview.addEventListener("click", () => openTranscriptPreview(recording.selectedTranscriptPath, preview));
@@ -284,7 +296,7 @@ function renderLibrary() {
     const list = $("#library-list");
     list.replaceChildren();
     if (!page.items?.length) showListState(list, "No recordings match these filters.");
-    else for (const recording of page.items) list.appendChild(makeRecordingRow(recording));
+    else for (const recording of page.items) list.appendChild(makeRecordingRow(recording, { queueAction: true }));
     const start = page.total ? page.offset + 1 : 0;
     const end = page.offset + (page.items?.length || 0);
     $("#library-result-count").textContent = `${start}-${end} of ${page.total} recordings`;
@@ -303,7 +315,10 @@ function updateSelectionUi() {
     $("#transcriber-selection-count").textContent = `${count} selected`;
     $("#library-queue-button").disabled = count === 0;
     $("#queue-selected-button").disabled = count === 0;
-    for (const checkbox of $$(".row-select input")) checkbox.checked = appState.selectedRecordings.has(checkbox.value);
+    for (const checkbox of $$(".row-select input")) {
+        checkbox.checked = appState.selectedRecordings.has(checkbox.value);
+        checkbox.closest(".data-row")?.classList.toggle("is-selected", checkbox.checked);
+    }
 }
 
 function populateTranscriberForm() {
@@ -314,12 +329,9 @@ function populateTranscriberForm() {
     $("#transcriber-speaker-self-name").value = status["transcriber.speaker_self_name"] || "Speaker A";
     $("#transcriber-speaker-remote-name").value = status["transcriber.speaker_remote_name"] || "Speaker B";
     ensureSelectValue($("#transcriber-output-format"), status["transcriber.output_format"] || "txt");
-    const localPath = status["transcriber.whisper_local_path"] || "";
-    $("#transcriber-whisper-local-enabled").checked = Boolean(localPath);
-    $("#transcriber-whisper-local-path").value = localPath;
-    syncOverrideField("#transcriber-whisper-local-enabled", "#transcriber-whisper-local-field");
-    setPresetOrCustom("#transcriber-model-preset", "#transcriber-model-url-enabled", "#transcriber-model-url", "#transcriber-model-url-field", status["transcriber.model_url"] || "");
-    setPresetOrCustom("#transcriber-tdrz-preset", "#transcriber-tdrz-url-enabled", "#transcriber-tdrz-url", "#transcriber-tdrz-url-field", status["transcriber.tinydiarize_model_url"] || "");
+    const modelSelect = $("#transcriber-model-preset");
+    const configuredModel = status["transcriber.model_url"] || DEFAULT_MODEL_URL;
+    modelSelect.value = [...modelSelect.options].some((option) => option.value === configuredModel) ? configuredModel : DEFAULT_MODEL_URL;
     updateModelCompatibility();
 }
 
@@ -328,23 +340,9 @@ function ensureSelectValue(select, value) {
     select.value = value;
 }
 
-function setPresetOrCustom(presetSelector, toggleSelector, inputSelector, fieldSelector, value) {
-    const preset = $(presetSelector);
-    const known = [...preset.options].some((option) => option.value === value);
-    $(toggleSelector).checked = !known && Boolean(value);
-    $(inputSelector).value = known ? "" : value;
-    if (known) preset.value = value;
-    $(fieldSelector).hidden = !$(toggleSelector).checked;
-}
-
-function syncOverrideField(toggleSelector, fieldSelector) {
-    $(fieldSelector).hidden = !$(toggleSelector).checked;
-}
-
 function updateModelCompatibility() {
     const language = $("#transcriber-language").value || "en";
-    const custom = $("#transcriber-model-url-enabled").checked;
-    const url = custom ? $("#transcriber-model-url").value : $("#transcriber-model-preset").value;
+    const url = $("#transcriber-model-preset").value;
     const englishOnly = /\.en\.bin(?:$|\?)/i.test(url);
     const note = $("#model-compatibility-note");
     if (englishOnly && !["en", "auto"].includes(language)) {
@@ -456,7 +454,7 @@ function renderTranscriberRecordings() {
     const list = $("#transcriber-recording-list");
     list.replaceChildren();
     if (!page.items?.length) showListState(list, "No recordings match this search.");
-    else for (const recording of page.items) list.appendChild(makeRecordingRow(recording, { compact: true }));
+    else for (const recording of page.items) list.appendChild(makeRecordingRow(recording, { compact: true, queueAction: true }));
     const controls = element("div", { className: "pagination" });
     const previous = element("button", { className: "text-button secondary", text: "Previous", type: "button" });
     previous.disabled = page.offset <= 0;
@@ -522,29 +520,19 @@ function renderComponents() {
     }
 }
 
-function renderDiagnostics(snapshot) {
-    const health = $("#health-grid");
-    health.replaceChildren();
+function renderDiagnostics() {
     const status = appState.status;
-    const transcriber = appState.transcriber || {};
-    const mode = currentMode();
-    const healthItems = [
-        ["Recorder daemon", status["daemon.running"] === "1" ? "Running" : "Stopped", status["daemon.running"] === "1" ? "success" : "danger"],
-        ["Output folder", status["output.dir.writable"] === "1" ? "Writable" : "Needs attention", status["output.dir.writable"] === "1" ? "success" : "danger"],
-        ["Transcript folder", status["transcriber.output_dir.writable"] === "1" ? "Writable" : "Needs attention", status["transcriber.output_dir.writable"] === "1" ? "success" : "danger"],
-        ["Free storage", formatBytes(status["output.dir.free_bytes"]), "neutral"],
-        ["Transcriber", mode === "mono" ? (transcriber.dependencies?.readyForMonoDiarization ? "Ready" : "Needs components") : (transcriber.dependencies?.readyForStereo ? "Ready" : "Needs components"), mode === "mono" ? (transcriber.dependencies?.readyForMonoDiarization ? "success" : "warning") : (transcriber.dependencies?.readyForStereo ? "success" : "warning")],
-    ];
-    for (const [label, value, tone] of healthItems) {
-        const item = element("div", { className: "health-item" });
-        item.append(element("span", { text: label }), element("strong", { text: value }), badge(titleCase(tone), tone));
-        health.appendChild(item);
-    }
     $("#debug-enabled").checked = status["debug.enabled"] === "1";
     $("#raw-status-output").textContent = formatRaw(status);
     $("#raw-transcriber-output").textContent = appState.transcriber ? JSON.stringify(appState.transcriber, null, 2) : "Transcriber status unavailable.";
     $("#raw-components-output").textContent = formatRaw(appState.components);
-    if (snapshot?.meta?.["snapshot.generated_at"]) $("#diagnostic-output").textContent = `Health snapshot captured ${formatDate(snapshot.meta["snapshot.generated_at"])}.`;
+}
+
+function showDiagnosticResult(text) {
+    const details = $("#diagnostic-result-details");
+    $("#diagnostic-output").textContent = text;
+    details.hidden = false;
+    details.open = true;
 }
 
 function updateSaveBar() {
@@ -592,12 +580,7 @@ async function saveChanges(button) {
         const transcriptOutput = $("#transcriber-output-dir").value.trim() || `${$("#output-dir").value.trim() || DEFAULT_OUTPUT_DIR}/transcripts`;
         const selfName = $("#transcriber-speaker-self-name").value.trim() || "Speaker A";
         const remoteName = $("#transcriber-speaker-remote-name").value.trim() || "Speaker B";
-        const localPath = $("#transcriber-whisper-local-enabled").checked ? $("#transcriber-whisper-local-path").value.trim() : "";
-        const modelUrl = $("#transcriber-model-url-enabled").checked ? $("#transcriber-model-url").value.trim() : $("#transcriber-model-preset").value;
-        const tdrzUrl = $("#transcriber-tdrz-url-enabled").checked ? $("#transcriber-tdrz-url").value.trim() : $("#transcriber-tdrz-preset").value;
-        if ($("#transcriber-whisper-local-enabled").checked && !localPath) throw new Error("Enter the local whisper.cpp package path or turn off the override.");
-        if (!modelUrl) throw new Error("Choose a Whisper model or provide a custom model URL.");
-        if (!tdrzUrl) throw new Error("Choose a TinyDiarize model or provide a custom model URL.");
+        const modelUrl = $("#transcriber-model-preset").value || DEFAULT_MODEL_URL;
         commands.push(
             `sh ./action.sh config set transcriber.enabled ${enabled ? "1" : "0"}`,
             `sh ./action.sh config set transcriber.output_dir ${shellQuote(transcriptOutput)}`,
@@ -605,11 +588,9 @@ async function saveChanges(button) {
             `sh ./action.sh config set transcriber.speaker_self_name ${shellQuote(selfName)}`,
             `sh ./action.sh config set transcriber.speaker_remote_name ${shellQuote(remoteName)}`,
             `sh ./action.sh config set transcriber.output_format ${shellQuote($("#transcriber-output-format").value || "txt")}`,
-            `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(appState.status["transcriber.whisper_manifest_url"] || DEFAULT_MANIFEST_URL)}`,
-            "sh ./action.sh config set transcriber.whisper_url ''",
-            `sh ./action.sh config set transcriber.whisper_local_path ${shellQuote(localPath)}`,
+            `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(DEFAULT_MANIFEST_URL)}`,
             `sh ./action.sh config set transcriber.model_url ${shellQuote(modelUrl)}`,
-            `sh ./action.sh config set transcriber.tinydiarize_model_url ${shellQuote(tdrzUrl)}`,
+            `sh ./action.sh config set transcriber.tinydiarize_model_url ${shellQuote(DEFAULT_TINYDIARIZE_URL)}`,
             "sh ./action.sh transcriber components-reset",
         );
         if (removeComponents) commands.push("sh ./action.sh transcriber remove-deps");
@@ -640,14 +621,13 @@ async function resetRecorder(button) {
     }, "Resetting");
 }
 
-async function queueSelected(button) {
-    const paths = [...appState.selectedRecordings];
+async function queueRecordings(paths, button, { knownRecordings = [], clearSelection = false } = {}) {
     if (!paths.length) return showToast("Select at least one recording");
     if (appState.status["transcriber.enabled"] !== "1") {
         showActionError(new Error("Enable the transcriber before adding jobs."));
         return;
     }
-    const visible = new Map((appState.recordings.items || []).map((item) => [item.path, item]));
+    const visible = new Map([...(appState.recordings.items || []), ...knownRecordings].map((item) => [item.path, item]));
     let policy = "skip";
     if (paths.some((path) => visible.get(path)?.selectedTranscriptExists)) {
         const choice = await requestChoice({ title: "Existing transcripts", message: "Some selected recordings already have a transcript in the selected format.", actions: [{ label: "Skip existing", value: "skip" }, { label: "Overwrite", value: "overwrite", className: "text-button secondary" }, { label: "Cancel", value: "cancel", className: "text-button secondary" }] });
@@ -656,11 +636,17 @@ async function queueSelected(button) {
     }
     await withPending(button, async () => {
         await run(`sh ./action.sh transcriber enqueue ${policy} ${paths.map(shellQuote).join(" ")}`);
-        for (const path of paths) appState.selectedRecordings.delete(path);
-        rememberSelection();
-        showToast("Recordings added to the queue");
+        if (clearSelection) {
+            for (const path of paths) appState.selectedRecordings.delete(path);
+            rememberSelection();
+        }
+        showToast(paths.length === 1 ? "Recording added to the queue" : "Recordings added to the queue");
         await refreshActiveView();
     }, "Queueing");
+}
+
+async function queueSelected(button) {
+    return queueRecordings([...appState.selectedRecordings], button, { clearSelection: true });
 }
 
 async function queueControl(command, id, button) {
@@ -686,6 +672,13 @@ async function openTranscriptPreview(path, button) {
 
 async function prepareComponents(button) {
     await withPending(button, async () => {
+        const modelUrl = $("#transcriber-model-preset").value || DEFAULT_MODEL_URL;
+        await run([
+            `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(DEFAULT_MANIFEST_URL)}`,
+            `sh ./action.sh config set transcriber.model_url ${shellQuote(modelUrl)}`,
+            `sh ./action.sh config set transcriber.tinydiarize_model_url ${shellQuote(DEFAULT_TINYDIARIZE_URL)}`,
+            "sh ./action.sh transcriber components-reset",
+        ].join(" && "));
         const metadata = await runCapture("sh ./action.sh transcriber components-refresh-metadata");
         if (!metadata.ok) showActionError(new Error(`Could not refresh download sizes: ${metadata.stderr}`));
         await refreshActiveView({ silent: true });
@@ -752,7 +745,7 @@ function updateFilter(scope) {
     if (scope === "library") {
         filter.search = $("#library-search").value.trim();
         filter.transcript = $("#library-transcript-filter").value;
-        filter.channel = $("#library-channel-filter").value;
+        filter.channel = "all";
         filter.sort = $("#library-sort").value;
     } else {
         filter.search = $("#transcriber-search").value.trim();
@@ -818,14 +811,11 @@ function bindEvents() {
     const recorderFields = ["#recording-enabled", "#recording-log-enabled", "#recording-format", "#output-dir", "#min-duration"];
     for (const selector of recorderFields) $(selector).addEventListener("input", () => markSettingsDirty("recorder"));
     for (const radio of $$("input[name='recording-mode']")) radio.addEventListener("change", () => markSettingsDirty("recorder"));
-    const transcriberFields = ["#transcriber-enabled", "#transcriber-output-dir", "#transcriber-language", "#transcriber-speaker-self-name", "#transcriber-speaker-remote-name", "#transcriber-output-format", "#transcriber-whisper-local-path", "#transcriber-model-preset", "#transcriber-model-url", "#transcriber-tdrz-preset", "#transcriber-tdrz-url"];
+    const transcriberFields = ["#transcriber-enabled", "#transcriber-output-dir", "#transcriber-language", "#transcriber-speaker-self-name", "#transcriber-speaker-remote-name", "#transcriber-output-format", "#transcriber-model-preset"];
     for (const selector of transcriberFields) $(selector).addEventListener("input", () => markSettingsDirty("transcriber"));
-    for (const [toggle, field] of [["#transcriber-whisper-local-enabled", "#transcriber-whisper-local-field"], ["#transcriber-model-url-enabled", "#transcriber-model-url-field"], ["#transcriber-tdrz-url-enabled", "#transcriber-tdrz-url-field"]]) {
-        $(toggle).addEventListener("change", () => { syncOverrideField(toggle, field); markSettingsDirty("transcriber"); });
-    }
 
     $("#library-search").addEventListener("input", () => { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(() => updateFilter("library"), 350); });
-    for (const selector of ["#library-transcript-filter", "#library-channel-filter", "#library-sort"]) $(selector).addEventListener("change", () => updateFilter("library"));
+    for (const selector of ["#library-transcript-filter", "#library-sort"]) $(selector).addEventListener("change", () => updateFilter("library"));
     $("#transcriber-search").addEventListener("input", () => { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(() => updateFilter("transcriber"), 350); });
     $("#library-prev-button").addEventListener("click", () => changeLibraryPage(-1));
     $("#library-next-button").addEventListener("click", () => changeLibraryPage(1));
@@ -847,9 +837,9 @@ function bindEvents() {
         showToast("Debug setting saved");
         await refreshActiveView();
     }, "Saving"));
-    $("#run-probe-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { $("#diagnostic-output").textContent = await run("sh ./action.sh probe") || "Probe returned no output."; }, "Probing"));
+    $("#run-probe-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { showDiagnosticResult(await run("sh ./action.sh probe") || "Probe returned no output."); }, "Probing"));
     $("#restart-daemon-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { await run("sh ./action.sh restart"); await refreshActiveView(); showToast("Recorder daemon restarted"); }, "Restarting"));
-    $("#load-logs-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { $("#diagnostic-output").textContent = await run("sh ./action.sh logs") || "No logs available."; }, "Loading"));
+    $("#load-logs-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { showDiagnosticResult(await run("sh ./action.sh logs") || "No logs available."); }, "Loading"));
 
     $("#close-preview-button").addEventListener("click", () => $("#preview-dialog").close());
     $("#close-preview-footer-button").addEventListener("click", () => $("#preview-dialog").close());

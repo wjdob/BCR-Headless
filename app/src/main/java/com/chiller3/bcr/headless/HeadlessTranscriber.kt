@@ -162,13 +162,7 @@ object HeadlessTranscriber {
                 }
             }
 
-        val pageItems = matched.drop(offset).take(limit).map { candidate ->
-            if (candidate.audioChannels != null) {
-                candidate
-            } else {
-                candidate.copy(audioChannels = inspectAudioChannels(File(candidate.path)))
-            }
-        }
+        val pageItems = matched.drop(offset).take(limit)
 
         println(
             JSON.encodeToString(

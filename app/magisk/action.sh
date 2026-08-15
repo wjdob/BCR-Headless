@@ -266,44 +266,6 @@ case "${command}" in
                 component_status_reset
                 print_transcriber_components_status
                 ;;
-            local-whisper)
-                local_action="${3:-}"
-
-                case "${local_action}" in
-                    begin)
-                        filename="${4:-whisper-cli}"
-                        begin_transcriber_whisper_upload "${filename}"
-                        print_transcriber_components_status
-                        ;;
-                    append-base64)
-                        shift 3 || true
-                        encoded_chunk="${*}"
-
-                        if [ -z "${encoded_chunk}" ]; then
-                            echo "Usage: $0 transcriber local-whisper append-base64 <base64_chunk>" >&2
-                            exit 1
-                        fi
-
-                        append_transcriber_whisper_upload "${encoded_chunk}"
-                        ;;
-                    commit)
-                        commit_transcriber_whisper_upload
-                        print_transcriber_components_status
-                        ;;
-                    clear)
-                        clear_transcriber_whisper_local_package
-                        print_transcriber_components_status
-                        ;;
-                    cancel)
-                        clear_transcriber_whisper_upload
-                        print_transcriber_components_status
-                        ;;
-                    *)
-                        echo "Usage: $0 transcriber local-whisper [begin|append-base64|commit|clear|cancel]" >&2
-                        exit 1
-                        ;;
-                esac
-                ;;
             remove-deps)
                 remove_transcriber_dependencies
                 print_transcriber_components_status
@@ -341,7 +303,7 @@ case "${command}" in
                 tail -n 200 "${transcriber_log}" 2>/dev/null || true
                 ;;
             *)
-                echo "Usage: $0 transcriber [status|list|library|enqueue|pause|resume|stop|clear|remove|retry|move-up|move-down|start-worker|install-deps|components-status|components-refresh-metadata|components-reset|local-whisper|remove-deps|remove-component|open-transcript|preview|logs]" >&2
+                echo "Usage: $0 transcriber [status|list|library|enqueue|pause|resume|stop|clear|remove|retry|move-up|move-down|start-worker|install-deps|components-status|components-refresh-metadata|components-reset|remove-deps|remove-component|open-transcript|preview|logs]" >&2
                 exit 1
                 ;;
         esac

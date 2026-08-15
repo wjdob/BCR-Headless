@@ -1,6 +1,17 @@
 ### Unreleased
 
-#### 1.3.0-test.1
+#### 1.3.0-test.2
+
+- Removed eager audio-channel inspection from normal recording listings, making
+  Library and Transcribe navigation scale with larger recording sets
+- Made the module's local configuration mirror the fast path for WebUI
+  snapshots, with a one-time KernelSU fallback for legacy-only values
+- Added a compact inline transcription-queue action to every recording row
+- Removed channel filtering and unsupported custom component-source controls
+- Collapsed Recorder settings by default and simplified Diagnostics to keep
+  troubleshooting output on demand
+- Refined search alignment, mobile bulk-selection layout, list density, and the
+  light/dark visual system with a clearer operational accent
 
 - Rebuilt the WebUI around compact Recorder, Library, Transcribe, and
   Diagnostics views with desktop side navigation and mobile bottom navigation
@@ -12,7 +23,7 @@
   server-side recording paging and filtering, and persistent multi-selection
 - Added recorder output health, free-space reporting, detected capture status,
   and latest-recording context
-- Added searchable Library rows with channel and transcript filters, sort
+- Added searchable Library rows with transcript filters, sort
   controls, recording actions, queue actions, and transcript preview
 - Added queue retry and reordering plus processing stage, progress, elapsed time,
   ETA, and creation/start/completion timestamps

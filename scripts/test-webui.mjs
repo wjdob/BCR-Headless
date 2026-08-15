@@ -21,6 +21,12 @@ for (const required of [
 }
 assert.ok(!app.includes("innerHTML"), "Dynamic data must not be rendered with innerHTML");
 assert.ok(!app.includes("setInterval"), "Polling must use one-shot timers to avoid overlapping root calls");
+assert.ok(!ids.includes("library-channel-filter"), "Library channel filtering should not be exposed");
+assert.ok(!ids.includes("transcriber-whisper-local-path"), "Local component sources should not be exposed");
+assert.ok(!html.includes("Advanced component sources"), "Custom component sources should not be exposed");
+assert.match(html, /<details id="recorder-settings"[^>]*>/, "Recorder settings should be collapsible");
+assert.doesNotMatch(html, /<details id="recorder-settings"[^>]*\sopen(?:\s|>)/, "Recorder settings should start collapsed");
+assert.ok(app.includes("queueAction: true"), "Recording rows should expose inline transcription queue actions");
 assert.equal(MOCK_SCENARIO, "default");
 for (const scenario of ["empty", "download", "failure", "debug"]) {
     assert.ok(fs.readFileSync(path.join(webroot, "mock-api.js"), "utf8").includes(`MOCK_SCENARIO === "${scenario}"`));
@@ -30,6 +36,7 @@ const library = await mockSnapshot("library", { offset: 0, limit: 20, search: ""
 assert.equal(library.recordings.items.length, 20);
 assert.equal(library.recordings.offset, 0);
 assert.ok(library.recordings.hasMore);
+assert.ok(library.recordings.items.every((item) => item.audioChannels === null));
 
 const filtered = await mockSnapshot("library", { offset: 0, limit: 20, search: "", transcript: "ready", sort: "newest", channel: "mono" });
 assert.ok(filtered.recordings.items.every((item) => item.selectedTranscriptExists && item.audioChannels === 1));

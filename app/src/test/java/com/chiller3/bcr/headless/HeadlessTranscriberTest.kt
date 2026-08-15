@@ -147,6 +147,7 @@ class HeadlessTranscriberTest {
         assertEquals(listOf("call-2.wav", "call-3.wav"), page.items.map { it.name })
         assertTrue(page.hasMore)
         assertTrue(page.items.last().selectedTranscriptExists)
+        assertTrue(page.items.all { it.audioChannels == null })
     }
 
     @Test
