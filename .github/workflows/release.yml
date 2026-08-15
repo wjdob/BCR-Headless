@@ -81,7 +81,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon :app:testReleaseUnitTest :app:zipRelease \
+          ./gradlew --no-daemon :app:test :app:zipRelease \
               -PprojectUrl="https://github.com/${GITHUB_REPOSITORY}" \
               -PreleaseMetadataBranch="main"
 
