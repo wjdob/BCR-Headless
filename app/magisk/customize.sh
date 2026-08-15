@@ -41,7 +41,8 @@ preserve_existing_state() {
     module_id=$(grep '^id=' "${module_prop_file}" 2>/dev/null | cut -d= -f2-)
     [ -n "${module_id}" ] || return 0
 
-    current_modpath="/data/adb/modules/${module_id}"
+    modules_root="${BCR_MODULES_DIR:-/data/adb/modules}"
+    current_modpath="${modules_root}/${module_id}"
     [ -d "${current_modpath}" ] || return 0
     [ "${current_modpath}" != "${MODPATH}" ] || return 0
 

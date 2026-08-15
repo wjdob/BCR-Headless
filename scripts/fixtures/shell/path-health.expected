@@ -1,0 +1,4 @@
+output.dir.exists=1
+output.dir.writable=1
+transcriber.output_dir.exists=1
+transcriber.output_dir.writable=1

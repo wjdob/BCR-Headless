@@ -45,11 +45,21 @@ jobs:
               draft="${{ inputs.draft }}"
           fi
 
+          private_test=false
+          if [[ "${version}" == *-test.* ]]; then
+              private_test=true
+              if [[ "${draft}" != true ]]; then
+                  echo "Test versions may only be created as draft releases" >&2
+                  exit 1
+              fi
+          fi
+
           {
               echo "version=${version}"
               echo "tag=v${version}"
               echo "publish=${publish}"
               echo "draft=${draft}"
+              echo "private_test=${private_test}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Check out repository
@@ -71,7 +81,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon :app:zipRelease \
+          ./gradlew --no-daemon :app:testReleaseUnitTest :app:zipRelease \
               -PprojectUrl="https://github.com/${GITHUB_REPOSITORY}" \
               -PreleaseMetadataBranch="main"
 
@@ -88,11 +98,23 @@ jobs:
           echo "path=${zip_path}" >> "${GITHUB_OUTPUT}"
           echo "name=$(basename "${zip_path}")" >> "${GITHUB_OUTPUT}"
 
+      - name: Create checksum
+        id: checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          checksum_path="${{ steps.zip.outputs.path }}.sha256"
+          sha256sum "${{ steps.zip.outputs.path }}" > "${checksum_path}"
+          echo "path=${checksum_path}" >> "${GITHUB_OUTPUT}"
+
       - name: Upload workflow artifact
+        if: ${{ steps.release.outputs.private_test != 'true' && (steps.release.outputs.publish != 'true' || steps.release.outputs.draft != 'true') }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.zip.outputs.name }}
-          path: ${{ steps.zip.outputs.path }}
+          path: |
+            ${{ steps.zip.outputs.path }}
+            ${{ steps.checksum.outputs.path }}
           if-no-files-found: error
 
       - name: Create or update GitHub release
@@ -103,4 +125,9 @@ jobs:
           name: Version ${{ steps.release.outputs.version }}
           body_path: RELEASE.md
           draft: ${{ steps.release.outputs.draft }}
-          files: ${{ steps.zip.outputs.path }}
+          prerelease: ${{ contains(steps.release.outputs.version, '-') }}
+          make_latest: ${{ steps.release.outputs.draft == 'true' && 'false' || 'legacy' }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            ${{ steps.zip.outputs.path }}
+            ${{ steps.checksum.outputs.path }}

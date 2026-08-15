@@ -1,5 +1,40 @@
 ### Unreleased
 
+#### 1.3.0-test.1
+
+- Rebuilt the WebUI around compact Recorder, Library, Transcribe, and
+  Diagnostics views with desktop side navigation and mobile bottom navigation
+- Added responsive light and dark themes, keyboard-accessible dialogs and tabs,
+  durable inline errors, reduced-motion support, and mobile-sized controls
+- Replaced broad UI locking with per-action pending states and consolidated each
+  view refresh into one framed privileged snapshot request
+- Added request deduplication, stale-response protection, activity-only polling,
+  server-side recording paging and filtering, and persistent multi-selection
+- Added recorder output health, free-space reporting, detected capture status,
+  and latest-recording context
+- Added searchable Library rows with channel and transcript filters, sort
+  controls, recording actions, queue actions, and transcript preview
+- Added queue retry and reordering plus processing stage, progress, elapsed time,
+  ETA, and creation/start/completion timestamps
+- Kept queue creation and execution manual; boot and enqueue operations do not
+  start the transcription worker
+- Made pause terminate the active temporary process and safely requeue the job
+  from the beginning
+- Added atomic transcript publication and stale-running-job recovery so an
+  interruption cannot replace a valid transcript with partial output
+- Added remote speaker naming and timestamped `TXT`, `DOCX`, `SRT`, `VTT`, and
+  `JSON` transcript output with source and diarization metadata
+- Added per-component removal, compact component readiness, live preparation
+  details, output-directory health, and on-demand diagnostics
+- Split the WebUI into dependency-free command, state, rendering, dialog, mock,
+  and controller modules, with dynamic content rendered as text nodes
+- Added Kotlin transcript/queue/library tests, WebUI contract tests, shell and
+  JavaScript syntax checks, and release ZIP plus checksum handling
+- Added a draft-test release path that omits public workflow artifacts and never
+  updates production release metadata
+- Preserved module configuration, recorder history, logs, queue state,
+  downloaded components, recordings, and transcripts across in-place updates
+
 ### Version 1.1.2
 
 - Removed experimental auto-queue, charging-gated start, and charge-delay

@@ -16,7 +16,6 @@ transcriber_runtime_file="${state_dir}/transcriber-runtime.json"
 transcriber_queue_file="${state_dir}/transcriber-queue.json"
 transcriber_log="${state_dir}/transcriber.log"
 transcriber_stop_file="${state_dir}/transcriber.stop"
-transcriber_defer_file="${state_dir}/transcriber.defer"
 transcriber_pause_file="${state_dir}/transcriber.pause"
 transcriber_components_file="${state_dir}/transcriber-components.env"
 transcriber_components_pid_file="${state_dir}/transcriber-components.pid"
@@ -101,7 +100,7 @@ config_delete() {
 }
 
 config_list() {
-    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
+    keys="recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.speaker_remote_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url override.description"
 
     for key in ${keys}; do
         if value=$(config_get "${key}" 2>/dev/null); then
@@ -278,6 +277,9 @@ ensure_defaults() {
     if ! config_get transcriber.speaker_self_name >/dev/null 2>&1; then
         config_set transcriber.speaker_self_name "Speaker A"
     fi
+    if ! config_get transcriber.speaker_remote_name >/dev/null 2>&1; then
+        config_set transcriber.speaker_remote_name "Speaker B"
+    fi
     # Auto-queue and charging-gated transcription were experimental and have
     # been removed. Clear any leftover config from older builds.
     if config_get transcriber.auto_queue >/dev/null 2>&1; then
@@ -334,7 +336,7 @@ ensure_defaults() {
 reset_defaults() {
     # Drop the explicit config files and reapply the documented defaults so the
     # WebUI and the daemon always converge back to the same baseline values.
-    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
+    for key in recording.enabled output.dir recording.min_duration recording.log_enabled recording.stereo recording.format recording.available_formats recording.detected_mode recording.voice_call_stereo_supported recording.voice_call_probe_status recording.voice_call_probe_note notifications.enabled debug.enabled transcriber.enabled transcriber.output_dir transcriber.language transcriber.output_format transcriber.speaker_self_name transcriber.speaker_remote_name transcriber.whisper_path transcriber.model_path transcriber.tinydiarize_model_path transcriber.whisper_manifest_url transcriber.whisper_url transcriber.whisper_local_path transcriber.model_url transcriber.tinydiarize_model_url; do
         config_delete "${key}"
     done
 
@@ -521,7 +523,7 @@ start_transcriber_worker() {
     notifications_enabled=$(bool_string config_is_enabled notifications.enabled 1)
     speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")
 
-    rm -f "${transcriber_stop_file}" "${transcriber_defer_file}"
+    rm -f "${transcriber_stop_file}"
     touch "${transcriber_log}"
     printf '\n[%s] transcriber worker start\n' "$(component_timestamp)" >> "${transcriber_log}"
 
@@ -861,6 +863,7 @@ component.whisper_cli.status=missing
 component.whisper_cli.progress=0
 component.whisper_cli.bytes_downloaded=0
 component.whisper_cli.bytes_total=${whisper_bytes_total}
+component.whisper_cli.bytes_per_second=0
 component.whisper_cli.abi=${whisper_abi}
 component.whisper_cli.manifest_url=${whisper_manifest_url}
 component.whisper_cli.path=${whisper_path}
@@ -875,6 +878,7 @@ component.base_model.status=${base_model_initial_status}
 component.base_model.progress=0
 component.base_model.bytes_downloaded=0
 component.base_model.bytes_total=${default_model_size}
+component.base_model.bytes_per_second=0
 component.base_model.path=${model_path}
 component.base_model.url=${model_url}
 component.base_model.note=${base_model_note}
@@ -883,6 +887,7 @@ component.tinydiarize_model.status=${tdrz_model_initial_status}
 component.tinydiarize_model.progress=0
 component.tinydiarize_model.bytes_downloaded=0
 component.tinydiarize_model.bytes_total=${default_tinydiarize_model_size}
+component.tinydiarize_model.bytes_per_second=0
 component.tinydiarize_model.path=${tdrz_model_path}
 component.tinydiarize_model.url=${tdrz_model_url}
 component.tinydiarize_model.note=${tdrz_model_note}
@@ -1135,6 +1140,7 @@ download_component() {
     component_status_set "component.${component}.status" downloading
     component_status_set "component.${component}.progress" 0
     component_status_set "component.${component}.bytes_downloaded" 0
+    component_status_set "component.${component}.bytes_per_second" 0
     component_status_set "component.${component}.error" ""
 
     if [ "${source_kind}" = "local" ]; then
@@ -1162,6 +1168,7 @@ download_component() {
             return 1
         fi
         echo "[transcriber-components] ${component} downloader=${download_tool}"
+        download_started_at=$(date '+%s' 2>/dev/null || printf '0')
 
         while kill -0 "${download_pid}" 2>/dev/null; do
             downloaded=$(file_size_bytes "${tmp}")
@@ -1171,8 +1178,16 @@ download_component() {
             else
                 progress=0
             fi
+            download_now=$(date '+%s' 2>/dev/null || printf '0')
+            download_elapsed=$((download_now - download_started_at))
+            if [ "${download_elapsed}" -gt 0 ]; then
+                download_speed=$((downloaded / download_elapsed))
+            else
+                download_speed=0
+            fi
             component_status_set "component.${component}.bytes_downloaded" "${downloaded}"
             component_status_set "component.${component}.progress" "${progress}"
+            component_status_set "component.${component}.bytes_per_second" "${download_speed}"
             sleep 1
         done
 
@@ -1231,6 +1246,7 @@ download_component() {
     component_status_set "component.${component}.status" ready
     component_status_set "component.${component}.progress" 100
     component_status_set "component.${component}.bytes_downloaded" "$(file_size_bytes "${dest}")"
+    component_status_set "component.${component}.bytes_per_second" 0
     component_status_set "component.${component}.error" ""
     echo "[transcriber-components] ${component} ready at ${dest}"
     return 0
@@ -1298,8 +1314,72 @@ install_transcriber_dependencies() {
 
 remove_transcriber_dependencies() {
     rm -rf "${transcriber_tools_dir}"
-    rm -f "${transcriber_pid_file}" "${transcriber_runtime_file}" "${transcriber_stop_file}" "${transcriber_defer_file}" "${transcriber_pause_file}" "${transcriber_components_file}" "${transcriber_components_pid_file}" "${transcriber_whisper_upload_tmp}" "${transcriber_whisper_upload_target_file}"
+    rm -f "${transcriber_pid_file}" "${transcriber_runtime_file}" "${transcriber_stop_file}" "${transcriber_pause_file}" "${transcriber_components_file}" "${transcriber_components_pid_file}" "${transcriber_whisper_upload_tmp}" "${transcriber_whisper_upload_target_file}"
     rm -rf "${state_dir}/transcriber-work"
+}
+
+remove_transcriber_component() {
+    component="${1}"
+
+    case "${component}" in
+        whisper_cli)
+            target=$(config_get_or_default transcriber.whisper_path "${transcriber_tools_dir}/whisper-cli")
+            ;;
+        base_model)
+            target=$(config_get_or_default transcriber.model_path "${transcriber_tools_dir}/models/ggml-base.en.bin")
+            ;;
+        tinydiarize_model)
+            target=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
+            ;;
+        *)
+            echo "Unknown transcriber component: ${component}" >&2
+            return 1
+            ;;
+    esac
+
+    case "${target}" in
+        "${transcriber_tools_dir}"/*)
+            rm -f "${target}"
+            ;;
+        *)
+            echo "Refusing to remove a component outside the module tools directory: ${target}" >&2
+            return 1
+            ;;
+    esac
+    component_status_reset
+    echo "removed.component=${component}"
+}
+
+path_free_bytes() {
+    target="${1}"
+
+    while [ ! -e "${target}" ] && [ "${target}" != "/" ]; do
+        target=${target%/*}
+        [ -n "${target}" ] || target="/"
+    done
+
+    df -k "${target}" 2>/dev/null | awk 'NR > 1 { available = $4 } END { if (available ~ /^[0-9]+$/) printf "%.0f", available * 1024 }'
+}
+
+path_is_writable() {
+    target="${1}"
+
+    while [ ! -e "${target}" ] && [ "${target}" != "/" ]; do
+        target=${target%/*}
+        [ -n "${target}" ] || target="/"
+    done
+
+    [ -w "${target}" ]
+}
+
+print_directory_health() {
+    health_prefix="${1}"
+    health_path="${2}"
+
+    echo "${health_prefix}.path=${health_path}"
+    echo "${health_prefix}.exists=$(bool_string test -d "${health_path}")"
+    echo "${health_prefix}.writable=$(bool_string path_is_writable "${health_path}")"
+    echo "${health_prefix}.free_bytes=$(path_free_bytes "${health_path}")"
 }
 
 begin_transcriber_whisper_upload() {
@@ -1363,6 +1443,7 @@ print_status() {
     status_tdrz_model_path=$(config_get_or_default transcriber.tinydiarize_model_path "${transcriber_tools_dir}/models/ggml-small.en-tdrz.bin")
 
     echo "module.id=${module_id}"
+    echo "module.version=$(module_prop version)"
     echo "module.path=${mod_dir}"
     echo "recording.enabled=$(bool_string config_is_enabled recording.enabled 0)"
     echo "output.dir=${status_output_dir}"
@@ -1382,6 +1463,7 @@ print_status() {
     echo "transcriber.language=$(config_get_or_default transcriber.language en)"
     echo "transcriber.output_format=$(config_get_or_default transcriber.output_format txt)"
     echo "transcriber.speaker_self_name=$(config_get_or_default transcriber.speaker_self_name "Speaker A")"
+    echo "transcriber.speaker_remote_name=$(config_get_or_default transcriber.speaker_remote_name "Speaker B")"
     echo "transcriber.whisper_path=${status_whisper_path}"
     echo "transcriber.model_path=${status_model_path}"
     echo "transcriber.tinydiarize_model_path=${status_tdrz_model_path}"
@@ -1403,6 +1485,8 @@ print_status() {
         status_component_estimate=$((status_whisper_size + default_tinydiarize_model_size))
     fi
     echo "transcriber.components.estimated_bytes=${status_component_estimate}"
+    print_directory_health output.dir "${status_output_dir}"
+    print_directory_health transcriber.output_dir "${status_transcriber_output_dir}"
     echo "daemon.running=$(bool_string is_daemon_running)"
     echo "daemon.pid=$(cat "${pid_file}" 2>/dev/null || true)"
     clear_stale_transcriber_pid

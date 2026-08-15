@@ -2,6 +2,7 @@ on:
   push:
     branches:
       - main
+      - ux-overhaul-test
   pull_request:
 jobs:
   build:
@@ -22,6 +23,17 @@ jobs:
           distribution: 'temurin'
           java-version: 21
           cache: gradle
+
+      - name: Validate shell and WebUI contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n app/magisk/*.sh scripts/*.sh
+          bash scripts/test-shell-contracts.sh
+          for file in app/magisk/webroot/*.js; do
+              node --check "${file}"
+          done
+          node scripts/test-webui.mjs
 
       - name: Build and test
         # The headless rebuild can validate its release zip in CI because the

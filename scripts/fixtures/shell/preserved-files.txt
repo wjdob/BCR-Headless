@@ -1,0 +1,10 @@
+.config/output.dir
+tools/transcriber/whisper-cli
+.state/recording-log.json
+.state/transcriber-queue.json
+.state/transcriber-runtime.json
+.state/transcriber-components.env
+.state/transcriber-tools.env
+.state/transcriber-whisper-local.package
+.state/daemon.log
+.state/transcriber.log

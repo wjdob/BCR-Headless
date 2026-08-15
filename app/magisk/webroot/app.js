@@ -1,1985 +1,880 @@
-import { exec, moduleInfo, toast } from "./kernelsu.js";
+import { getSnapshot, IS_MOCK, run, runCapture, shellQuote } from "./api.js";
+import { appState, clearDirty, markDirty, rememberSelection, rememberView } from "./state.js";
+import { badge, element, iconButton, renderIcons, requestChoice, setPending, showListState, showToast } from "./ui.js";
 
-const DEFAULT_MODULE_ID = "bcr.headless";
 const DEFAULT_OUTPUT_DIR = "/sdcard/Recordings/BCRHeadless";
-const DEFAULT_WHISPER_MANIFEST_URL = "https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/transcriber-tools.env";
-
-function resolveModuleContext() {
-    try {
-        const info = moduleInfo() || {};
-        const moduleId = info.moduleId || info.id || DEFAULT_MODULE_ID;
-        const moduleDir = info.moduleDir || info.path || info.dir || `/data/adb/modules/${moduleId}`;
-
-        return { moduleId, moduleDir };
-    } catch (error) {
-        return {
-            moduleId: DEFAULT_MODULE_ID,
-            moduleDir: `/data/adb/modules/${DEFAULT_MODULE_ID}`,
-        };
-    }
-}
-
-const MODULE = resolveModuleContext();
-
-const statusOutput = document.querySelector("#status-output");
-const diagnosticOutput = document.querySelector("#diagnostic-output");
-const debugEnabled = document.querySelector("#debug-enabled");
-const debugStatusBadge = document.querySelector("#debug-status-badge");
-const debugTranscriberStatusOutput = document.querySelector("#debug-transcriber-status-output");
-const debugComponentsOutput = document.querySelector("#debug-components-output");
-const debugJobsOutput = document.querySelector("#debug-jobs-output");
-const debugTranscriberLogsOutput = document.querySelector("#debug-transcriber-logs-output");
-const runtimeBadge = document.querySelector("#runtime-badge");
-const lastResult = document.querySelector("#last-result");
-const lastOutput = document.querySelector("#last-output");
-const lastOutputTile = document.querySelector("#last-output-tile");
-const recordingEnabled = document.querySelector("#recording-enabled");
-const recordingLogEnabled = document.querySelector("#recording-log-enabled");
-const recordingMode = document.querySelector("#recording-mode");
-const recordingModeNote = document.querySelector("#recording-mode-note");
-const recordingFormat = document.querySelector("#recording-format");
-const outputDir = document.querySelector("#output-dir");
-const minDuration = document.querySelector("#min-duration");
-
-const recorderView = document.querySelector("#recorder-view");
-const recordingsView = document.querySelector("#recordings-view");
-const transcriberView = document.querySelector("#transcriber-view");
-const debugView = document.querySelector("#debug-view");
-const recorderTab = document.querySelector("#recorder-tab");
-const recordingsTab = document.querySelector("#recordings-tab");
-const transcriberTab = document.querySelector("#transcriber-tab");
-const debugTab = document.querySelector("#debug-tab");
-const recordingLogList = document.querySelector("#recording-log-list");
-const confirmOverlay = document.querySelector("#confirm-overlay");
-const confirmClearButton = document.querySelector("#confirm-clear-button");
-const cancelClearButton = document.querySelector("#cancel-clear-button");
-const choiceOverlay = document.querySelector("#choice-overlay");
-const choiceTitle = document.querySelector("#choice-title");
-const choiceMessage = document.querySelector("#choice-message");
-const choiceActions = document.querySelector("#choice-actions");
-const choiceCheckboxRow = document.querySelector("#choice-checkbox-row");
-const choiceCheckbox = document.querySelector("#choice-checkbox");
-const choiceCheckboxLabel = document.querySelector("#choice-checkbox-label");
-
-const transcriberEnabled = document.querySelector("#transcriber-enabled");
-const transcriberOutputDir = document.querySelector("#transcriber-output-dir");
-const transcriberLanguage = document.querySelector("#transcriber-language");
-const transcriberSpeakerSelfName = document.querySelector("#transcriber-speaker-self-name");
-const transcriberOutputFormat = document.querySelector("#transcriber-output-format");
-const transcriberWhisperLocalEnabled = document.querySelector("#transcriber-whisper-local-enabled");
-const transcriberWhisperLocalField = document.querySelector("#transcriber-whisper-local-field");
-const transcriberWhisperLocalPath = document.querySelector("#transcriber-whisper-local-path");
-const transcriberWhisperLocalStatus = document.querySelector("#transcriber-whisper-local-status");
-const transcriberModelPreset = document.querySelector("#transcriber-model-preset");
-const transcriberModelUrlEnabled = document.querySelector("#transcriber-model-url-enabled");
-const transcriberModelUrlField = document.querySelector("#transcriber-model-url-field");
-const transcriberModelUrl = document.querySelector("#transcriber-model-url");
-const transcriberTdrzPreset = document.querySelector("#transcriber-tdrz-preset");
-const transcriberTdrzUrlEnabled = document.querySelector("#transcriber-tdrz-url-enabled");
-const transcriberTdrzUrlField = document.querySelector("#transcriber-tdrz-url-field");
-const transcriberTdrzUrl = document.querySelector("#transcriber-tdrz-url");
-const transcriberEngineState = document.querySelector("#transcriber-engine-state");
-const transcriberQueueState = document.querySelector("#transcriber-queue-state");
-const transcriberWhisperPath = document.querySelector("#transcriber-whisper-path");
-const transcriberModelPath = document.querySelector("#transcriber-model-path");
-const transcriberTdrzPath = document.querySelector("#transcriber-tdrz-path");
-const componentWhisperProgress = document.querySelector("#component-whisper-progress");
-const componentModelProgress = document.querySelector("#component-model-progress");
-const componentTdrzProgress = document.querySelector("#component-tdrz-progress");
-const componentWhisperStatus = document.querySelector("#component-whisper-status");
-const componentModelStatus = document.querySelector("#component-model-status");
-const componentTdrzStatus = document.querySelector("#component-tdrz-status");
-const transcriberRecordingList = document.querySelector("#transcriber-recording-list");
-const transcriberQueueList = document.querySelector("#transcriber-queue-list");
-const transcriberCurrentProgress = document.querySelector("#transcriber-current-progress");
-const transcriberAllProgress = document.querySelector("#transcriber-all-progress");
-const transcriberCurrentProgressLabel = document.querySelector("#transcriber-current-progress-label");
-const transcriberAllProgressLabel = document.querySelector("#transcriber-all-progress-label");
-
-const buttons = Array.from(document.querySelectorAll("button"));
-const timestampFormatter = new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    timeZoneName: "short",
-});
-
-let confirmResolver = null;
-let choiceResolver = null;
-let latestStatus = {};
-let latestTranscriberStatus = null;
-let latestComponentsStatus = {};
-let latestRecordingCandidates = [];
-let componentPollTimer = null;
-let componentPollInFlight = false;
-let activeTabName = "recorder";
-let recordingLogVisibleCount = 120;
-let transcriberRecordingVisibleCount = 120;
-let transcriberQueueVisibleCount = 120;
-const PREPARE_PROFILE_STEREO = "stereo";
-const PREPARE_PROFILE_MONO = "mono";
-
-function shellQuote(value) {
-    return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-async function run(command) {
-    const result = await execCommand(command);
-
-    if (result.errno !== 0) {
-        throw new Error(formatExecError(result));
-    }
-
-    return (result.stdout || "").trim();
-}
-
-async function execCommand(command) {
-    return exec(command, {
-        cwd: MODULE.moduleDir,
-        env: {
-            KSU_MODULE: MODULE.moduleId,
-        },
-    });
-}
-
-async function runCapture(command) {
-    try {
-        const result = await execCommand(command);
-        return {
-            command,
-            ok: result.errno === 0,
-            errno: result.errno,
-            stdout: (result.stdout || "").trim(),
-            stderr: (result.stderr || "").trim(),
-        };
-    } catch (error) {
-        return {
-            command,
-            ok: false,
-            errno: -1,
-            stdout: "",
-            stderr: String(error.message || error),
-        };
-    }
-}
-
-function formatExecError(result) {
-    return [
-        `Command failed with errno ${result.errno}`,
-        (result.stderr || "").trim(),
-        (result.stdout || "").trim(),
-    ].filter(Boolean).join("\n");
-}
-
-function parseStatus(text) {
-    const values = {};
-
-    for (const line of text.split(/\r?\n/)) {
-        if (!line || !line.includes("=")) {
-            continue;
-        }
-
-        const idx = line.indexOf("=");
-        values[line.slice(0, idx)] = line.slice(idx + 1);
-    }
-
-    return values;
-}
-
-function setBusy(isBusy) {
-    for (const button of buttons) {
-        button.disabled = isBusy;
-    }
-
-    if (!isBusy) {
-        updateDebugControls();
-    }
-}
-
-function setActiveTab(name) {
-    activeTabName = name;
-    const isRecorder = name === "recorder";
-    const isRecordings = name === "recordings";
-    const isTranscriber = name === "transcriber";
-    const isDebug = name === "debug";
-
-    recorderView.hidden = !isRecorder;
-    recordingsView.hidden = !isRecordings;
-    transcriberView.hidden = !isTranscriber;
-    debugView.hidden = !isDebug;
-
-    recorderTab.classList.toggle("active", isRecorder);
-    recorderTab.classList.toggle("ghost", !isRecorder);
-    recordingsTab.classList.toggle("active", isRecordings);
-    recordingsTab.classList.toggle("ghost", !isRecordings);
-    transcriberTab.classList.toggle("active", isTranscriber);
-    transcriberTab.classList.toggle("ghost", !isTranscriber);
-    debugTab.classList.toggle("active", isDebug);
-    debugTab.classList.toggle("ghost", !isDebug);
-
-    if (!isTranscriber) {
-        stopComponentPolling();
-    } else {
-        updateTranscriberPolling();
-    }
-
-    updateDebugControls();
-}
-
-function selectHasValue(select, value) {
-    return Array.from(select?.options || []).some((option) => option.value === value);
-}
-
-function ensureSelectValue(select, value, fallbackLabelPrefix = "Saved") {
-    if (!select) {
-        return;
-    }
-
-    if (selectHasValue(select, value)) {
-        select.value = value;
-        return;
-    }
-
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = `${fallbackLabelPrefix}: ${value}`;
-    select.appendChild(option);
-    select.value = value;
-}
-
-function syncTranscriberAdvancedFields() {
-    if (transcriberWhisperLocalField) {
-        transcriberWhisperLocalField.hidden = !transcriberWhisperLocalEnabled?.checked;
-    }
-    if (transcriberModelUrlField) {
-        transcriberModelUrlField.hidden = !transcriberModelUrlEnabled?.checked;
-    }
-    if (transcriberTdrzUrlField) {
-        transcriberTdrzUrlField.hidden = !transcriberTdrzUrlEnabled?.checked;
-    }
-}
-
-function getSavedRecorderMode(values = latestStatus) {
-    return values["recording.stereo"] === "0" ? PREPARE_PROFILE_MONO : PREPARE_PROFILE_STEREO;
-}
-
-function getRecorderModeLabel(mode) {
-    return mode === PREPARE_PROFILE_MONO ? "Mono fallback" : "Stereo";
-}
-
-function getProbeStatusSummary(values = latestStatus) {
-    const detectedMode = values["recording.detected_mode"] === PREPARE_PROFILE_MONO
-        ? PREPARE_PROFILE_MONO
-        : PREPARE_PROFILE_STEREO;
-    const supportFlag = values["recording.voice_call_stereo_supported"] === "1";
-    const probeNote = values["recording.voice_call_probe_note"] || "";
-    const summary = supportFlag
-        ? `VOICE_CALL check: stereo available (${getRecorderModeLabel(detectedMode)} detected)`
-        : "VOICE_CALL check: mono fallback only";
-    return probeNote ? `${summary}. ${probeNote}` : summary;
-}
-
-function updateRecordingModeNote(values = latestStatus) {
-    if (!recordingModeNote || !recordingMode) {
-        return;
-    }
-
-    const savedMode = getSavedRecorderMode(values);
-    const pendingOverride = recordingMode.value && recordingMode.value !== savedMode;
-    recordingModeNote.textContent = pendingOverride
-        ? `${getProbeStatusSummary(values)} Save Changes to apply this override.`
-        : getProbeStatusSummary(values);
-}
-
-function parseAvailableRecordingFormats(values = latestStatus) {
-    const raw = values["recording.available_formats"] || "wav";
-    const formats = raw
-        .split(",")
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean);
-    return formats.length ? formats : ["wav"];
-}
-
-function updateRecordingFormatOptions(values = latestStatus) {
-    if (!recordingFormat) {
-        return;
-    }
-
-    const available = new Set(parseAvailableRecordingFormats(values));
-    for (const option of Array.from(recordingFormat.options)) {
-        option.disabled = !available.has(option.value);
-    }
-}
-
-function getPrepareEstimateBytes(profile, values = latestComponentsStatus) {
-    const whisperBytes = Number(values["component.whisper_cli.bytes_total"] || 0);
-    const modelBytes = Number(values["component.base_model.bytes_total"] || 0);
-    const tdrzBytes = Number(values["component.tinydiarize_model.bytes_total"] || 0);
-    return whisperBytes + (profile === PREPARE_PROFILE_MONO ? tdrzBytes : modelBytes);
-}
-
-function isTranscriberReadyForRecorderMode(status = latestTranscriberStatus, values = latestStatus) {
-    const deps = status?.dependencies || {};
-    return getSavedRecorderMode(values) === PREPARE_PROFILE_MONO
-        ? !!deps.readyForMonoDiarization
-        : !!deps.readyForStereo;
-}
-
-function updateUiFromStatus(values) {
-    latestStatus = values;
-    const enabled = values["recording.enabled"] === "1";
-
-    recordingEnabled.checked = enabled;
-    recordingLogEnabled.checked = values["recording.log_enabled"] !== "0";
-    if (recordingMode) {
-        recordingMode.value = getSavedRecorderMode(values);
-    }
-    updateRecordingFormatOptions(values);
-    ensureSelectValue(recordingFormat, values["recording.format"] || "wav", "Saved format");
-    debugEnabled.checked = values["debug.enabled"] === "1";
-    outputDir.value = values["output.dir"] || DEFAULT_OUTPUT_DIR;
-    minDuration.value = values["recording.min_duration"] || "0";
-    transcriberEnabled.checked = values["transcriber.enabled"] === "1";
-    transcriberOutputDir.value = values["transcriber.output_dir"] || `${outputDir.value || DEFAULT_OUTPUT_DIR}/transcripts`;
-    ensureSelectValue(transcriberLanguage, values["transcriber.language"] || "en", "Saved language");
-    transcriberSpeakerSelfName.value = values["transcriber.speaker_self_name"] || "Speaker A";
-    transcriberOutputFormat.value = values["transcriber.output_format"] || "txt";
-    const whisperLocalPath = values["transcriber.whisper_local_path"] || "";
-    transcriberWhisperLocalEnabled.checked = whisperLocalPath !== "";
-    transcriberWhisperLocalPath.value = whisperLocalPath;
-
-    const modelUrl = values["transcriber.model_url"] || "";
-    if (selectHasValue(transcriberModelPreset, modelUrl)) {
-        transcriberModelPreset.value = modelUrl;
-        transcriberModelUrlEnabled.checked = false;
-        transcriberModelUrl.value = "";
-    } else {
-        transcriberModelUrlEnabled.checked = true;
-        transcriberModelUrl.value = modelUrl;
-    }
-
-    const tdrzUrl = values["transcriber.tinydiarize_model_url"] || "";
-    if (selectHasValue(transcriberTdrzPreset, tdrzUrl)) {
-        transcriberTdrzPreset.value = tdrzUrl;
-        transcriberTdrzUrlEnabled.checked = false;
-        transcriberTdrzUrl.value = "";
-    } else {
-        transcriberTdrzUrlEnabled.checked = true;
-        transcriberTdrzUrl.value = tdrzUrl;
-    }
-
-    syncTranscriberAdvancedFields();
-    updateRecordingModeNote(values);
-    updateTranscriberWhisperLocalStatus(values, latestComponentsStatus);
-
-    const running = values["daemon.running"] === "1";
-    const recorderState = enabled
-        ? (values["recorder.state"] || (running ? "running" : "stopped"))
-        : "disabled";
-    runtimeBadge.textContent = recorderState;
-    runtimeBadge.classList.toggle("recording", recorderState === "recording");
-
-    lastResult.textContent = values["last.result"] || (enabled ? (running ? "Daemon ready" : "Daemon stopped") : "Recording disabled");
-    lastOutput.textContent = values["last.output"] || values["output.dir"] || DEFAULT_OUTPUT_DIR;
-
-    const ordered = Object.keys(values)
-        .sort()
-        .map((key) => `${key}=${values[key]}`)
-        .join("\n");
-    statusOutput.textContent = ordered || "No status available.";
-    updateDebugControls();
-}
-
-async function refreshStatus() {
-    const raw = await run("sh ./action.sh status");
-    updateUiFromStatus(parseStatus(raw));
-}
-
-function formatTimestamp(value) {
-    if (!value) {
-        return "Unknown time";
-    }
-
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) {
-        return value;
-    }
-
-    return timestampFormatter.format(parsed);
-}
-
-function formatDuration(value) {
-    if (typeof value !== "number" || Number.isNaN(value)) {
-        return "Unknown length";
-    }
-
-    const totalSeconds = Math.max(0, Math.round(value));
-    const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
-    const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
-    const seconds = String(totalSeconds % 60).padStart(2, "0");
-    return `${hours}:${minutes}:${seconds}`;
-}
-
-function formatDirection(value) {
-    switch (value) {
-        case "incoming":
-            return "Incoming";
-        case "outgoing":
-            return "Outgoing";
-        case "conference":
-            return "Conference";
-        default:
-            return "Unknown direction";
-    }
-}
-
-function formatChannelSummary(channels) {
-    const count = Number(channels || 0);
-    if (count >= 2) {
-        return "Stereo";
-    }
-    if (count === 1) {
-        return "Mono";
-    }
-    return "Unknown channels";
-}
-
-function basename(value) {
-    if (!value) {
-        return "No file saved";
-    }
-
-    const parts = String(value).split(/[\\/]/);
-    return parts[parts.length - 1] || value;
-}
-
-function renderListFooter(listEl, visibleCount, totalCount, onShowMore) {
-    if (totalCount <= visibleCount) {
-        return;
-    }
-
-    const footer = document.createElement("div");
-    footer.className = "entry-list-footer";
-
-    const summary = document.createElement("span");
-    summary.className = "entry-meta secondary";
-    summary.textContent = `Showing ${visibleCount} of ${totalCount}`;
-    footer.appendChild(summary);
-
-    const showMore = document.createElement("button");
-    showMore.type = "button";
-    showMore.className = "ghost compact";
-    showMore.textContent = "Show More";
-    showMore.addEventListener("click", onShowMore);
-    footer.appendChild(showMore);
-
-    listEl.appendChild(footer);
-}
-
-function renderRecordingLog(entries) {
-    recordingLogList.textContent = "";
-
-    if (!entries.length) {
-        const empty = document.createElement("p");
-        empty.className = "entry-empty";
-        empty.textContent = "No recorded calls yet.";
-        recordingLogList.appendChild(empty);
-        return;
-    }
-
-    const shown = entries.slice(0, recordingLogVisibleCount);
-    for (const entry of shown) {
-        const card = document.createElement("article");
-        card.className = "entry-card compact";
-
-        const head = document.createElement("div");
-        head.className = "entry-head";
-
-        const titleWrap = document.createElement("div");
-
-        const title = document.createElement("strong");
-        title.textContent = entry.phoneNumber || "Unknown number";
-        titleWrap.appendChild(title);
-
-        const subtitle = document.createElement("div");
-        subtitle.className = "entry-meta";
-        subtitle.textContent = formatTimestamp(entry.timestamp);
-        titleWrap.appendChild(subtitle);
-
-        const direction = document.createElement("div");
-        direction.className = "entry-meta secondary";
-        direction.textContent = formatDirection(entry.direction);
-        titleWrap.appendChild(direction);
-
-        const status = document.createElement("span");
-        status.className = `entry-status ${entry.status}`;
-        status.textContent = entry.status || "unknown";
-
-        head.appendChild(titleWrap);
-        head.appendChild(status);
-
-        const details = document.createElement("div");
-        details.className = "entry-details";
-        details.innerHTML = `
-            <div><span class="label">Duration</span><strong>${formatDuration(entry.durationSeconds)}</strong></div>
-            <div><span class="label">Channels</span><strong>${entry.audioChannels || "Unknown"}</strong></div>
-            <div><span class="label">File</span><strong>${basename(entry.outputFile)}</strong></div>
-        `;
-        if (entry.error) {
-            const errorLine = document.createElement("div");
-            errorLine.innerHTML = `<span class="label">Error</span><strong>${entry.error}</strong>`;
-            details.appendChild(errorLine);
-        }
-        if (entry.outputFile) {
-            const pathMeta = document.createElement("div");
-            pathMeta.className = "entry-meta secondary";
-            pathMeta.textContent = entry.outputFile;
-            details.appendChild(pathMeta);
-        }
-
-        card.appendChild(head);
-        card.appendChild(details);
-
-        if (entry.outputFile) {
-            card.classList.add("clickable");
-            card.addEventListener("click", async () => {
-                await openRecording(entry.outputFile);
-            });
-        }
-
-        recordingLogList.appendChild(card);
-    }
-
-    renderListFooter(recordingLogList, shown.length, entries.length, () => {
-        recordingLogVisibleCount += 120;
-        renderRecordingLog(entries);
-    });
-}
-
-async function refreshRecordingLog() {
-    const raw = await run("sh ./action.sh recording-log list");
-    let entries = [];
-
-    try {
-        entries = JSON.parse(raw || "[]");
-    } catch (error) {
-        recordingLogList.textContent = String(error.message || error);
-        return;
-    }
-
-    recordingLogVisibleCount = 120;
-    renderRecordingLog(entries);
-}
-
-async function refreshAll({
-    includeTranscriber = false,
-    includeRecordingLog = activeTabName === "recordings",
-} = {}) {
-    await refreshStatus();
-    if (includeRecordingLog) {
-        await refreshRecordingLog();
-    }
-    if (includeTranscriber) {
-        await refreshTranscriberStatus();
-        await refreshTranscriberComponentsStatus();
-        await refreshTranscriberRecordings();
-    }
-}
-
-async function openLastOutputTarget() {
-    const lastOutputPath = latestStatus["last.output"]?.trim();
-    const outputDirectory = latestStatus["output.dir"] || outputDir.value.trim() || DEFAULT_OUTPUT_DIR;
-
-    if (!lastOutputPath) {
-        await openOutputDirectory();
-        return;
-    }
-
-    const normalize = (value) => String(value).replace(/\\/g, "/");
-    if (normalize(lastOutputPath) === normalize(outputDirectory)) {
-        await openOutputDirectory();
-        return;
-    }
-
-    await openRecording(lastOutputPath);
-}
-
-async function saveConfigAndRestart() {
-    const enabled = recordingEnabled.checked ? "1" : "0";
-    const logEnabled = recordingLogEnabled.checked ? "1" : "0";
-    const stereoEnabled = recordingMode?.value === PREPARE_PROFILE_MONO ? "0" : "1";
-    const format = recordingFormat?.value || "wav";
-    const output = outputDir.value.trim() || DEFAULT_OUTPUT_DIR;
-    const duration = String(Math.max(0, Number.parseInt(minDuration.value || "0", 10) || 0));
-
-    await run(
-        [
-            `sh ./action.sh config set recording.enabled ${enabled}`,
-            `sh ./action.sh config set recording.log_enabled ${logEnabled}`,
-            `sh ./action.sh config set recording.stereo ${stereoEnabled}`,
-            `sh ./action.sh config set recording.format ${shellQuote(format)}`,
-            `sh ./action.sh config set output.dir ${shellQuote(output)}`,
-            `sh ./action.sh config set recording.min_duration ${duration}`,
-            "sh ./action.sh restart",
-        ].join(" && "),
-    );
-
-    toast("Configuration applied");
-    await refreshAll({ includeTranscriber: activeTabName === "transcriber" });
-}
-
-async function resetDefaults() {
-    await run("sh ./action.sh reset-config && sh ./action.sh restart");
-    toast("Defaults restored");
-    await refreshAll({ includeTranscriber: activeTabName === "transcriber" });
-}
-
-async function openOutputDirectory() {
-    const output = await run("sh ./action.sh open-output-dir");
-    toast(output || "Opening output folder");
-}
-
-async function openRecording(path) {
-    const output = await run(`sh ./action.sh open-recording ${shellQuote(path)}`);
-
-    if (output.startsWith("open_recording.missing=")) {
-        toast("Recording file is missing");
-    } else if (output.startsWith("open_recording.unavailable=")) {
-        toast(output);
-    } else {
-        toast(output || "Opening recording");
-    }
-}
-
-async function clearRecordingLog() {
-    await run("sh ./action.sh recording-log clear");
-    toast("Recorded call log cleared");
-    await refreshRecordingLog();
-}
-
-async function refreshTranscriberStatus() {
-    const raw = await run("sh ./action.sh transcriber status");
-    try {
-        latestTranscriberStatus = JSON.parse(raw || "{}");
-    } catch (error) {
-        rememberDebugError("Transcriber status JSON parse failed", `${String(error.message || error)}\n${raw}`);
-        throw error;
-    }
-    renderTranscriberStatus(latestTranscriberStatus);
-    updateTranscriberPolling();
-}
-
-async function refreshTranscriberComponentsStatus() {
-    const raw = await run("sh ./action.sh transcriber components-status");
-    latestComponentsStatus = parseStatus(raw);
-    renderTranscriberComponents(latestComponentsStatus);
-    updateTranscriberPolling();
-}
-
-async function refreshTranscriberRecordings() {
-    const raw = await run("sh ./action.sh transcriber list");
-    latestRecordingCandidates = JSON.parse(raw || "[]");
-    transcriberRecordingVisibleCount = 120;
-    renderTranscriberRecordings(latestRecordingCandidates);
-}
-
-async function refreshTranscriberAll() {
-    await refreshTranscriberStatus();
-    await refreshTranscriberComponentsStatus();
-    await refreshTranscriberRecordings();
-}
-
-async function refreshTranscriberComponentMetadata({ silent = true } = {}) {
-    if (latestComponentsStatus["transcriber.components.running"] === "1") {
-        return;
-    }
-
-    const result = await runCapture("sh ./action.sh transcriber components-refresh-metadata");
-    if (!result.ok) {
-        if (silent) {
-            rememberDebugError("Transcriber component metadata refresh failed", result.stderr || result.stdout || "Unknown error");
-            return;
-        }
-        throw new Error(result.stderr || result.stdout || "Unable to refresh component metadata");
-    }
-
-    latestComponentsStatus = parseStatus(result.stdout || "");
-    renderTranscriberComponents(latestComponentsStatus);
-    updateTranscriberWhisperLocalStatus(latestStatus, latestComponentsStatus);
-    updateTranscriberPolling();
-}
-
-function renderTranscriberStatus(status) {
-    const deps = status.dependencies || {};
-    const queue = status.queue?.jobs || [];
-    const runtime = status.runtime || {};
-    const active = queue.filter((job) => job.status === "queued" || job.status === "running");
-    const done = queue.filter((job) => job.status === "succeeded" || job.status === "skipped").length;
-    const failed = queue.filter((job) => job.status === "failed" || job.status === "cancelled").length;
-    const enabled = latestStatus["transcriber.enabled"] === "1";
-    const recorderMode = getSavedRecorderMode(latestStatus);
-    const ready = isTranscriberReadyForRecorderMode(status, latestStatus);
-    const readyLabel = recorderMode === PREPARE_PROFILE_MONO ? "Ready for mono fallback" : "Ready for stereo";
-    const needsLabel = recorderMode === PREPARE_PROFILE_MONO ? "Needs mono fallback components" : "Needs stereo components";
-
-    transcriberEngineState.textContent = enabled
-        ? (ready ? readyLabel : needsLabel)
-        : "Disabled";
-    transcriberQueueState.textContent = queue.length
-        ? `${active.length} active, ${done} done, ${failed} failed`
-        : "No jobs";
-
-    transcriberWhisperPath.textContent = `${deps.whisperPath || "Not set"} (${deps.whisperExists ? "found" : "missing"})`;
-    transcriberModelPath.textContent = `${deps.modelPath || "Not set"} (${deps.modelExists ? "found" : "missing"})`;
-    transcriberTdrzPath.textContent = `${deps.tinydiarizeModelPath || "Not set"} (${deps.tinydiarizeModelExists ? "found" : "missing"})`;
-
-    const currentProgress = Math.max(0, Math.min(100, Number(runtime.progress || 0)));
-    transcriberCurrentProgress.style.width = `${currentProgress}%`;
-    transcriberCurrentProgressLabel.textContent = runtime.state === "running" ? `${currentProgress}%` : runtime.state || "idle";
-
-    const total = queue.length;
-    const completeScore = queue.reduce((sum, job) => {
-        if (job.status === "succeeded" || job.status === "skipped") {
-            return sum + 100;
-        }
-        if (job.status === "running") {
-            return sum + (Number(job.progress) || 0);
-        }
-        return sum;
-    }, 0);
-    const allProgress = total ? Math.round(completeScore / total) : 0;
-    transcriberAllProgress.style.width = `${allProgress}%`;
-    transcriberAllProgressLabel.textContent = runtime.etaSeconds
-        ? `~${formatEta(runtime.etaSeconds)}`
-        : (total ? `${allProgress}%` : "No estimate");
-
-    if (queue.length < transcriberQueueVisibleCount) {
-        transcriberQueueVisibleCount = Math.max(120, queue.length);
-    }
-    renderTranscriberQueue(queue);
-}
-
-function renderTranscriberComponents(values) {
-    renderComponent(
-        values,
-        "whisper_cli",
-        transcriberWhisperPath,
-        componentWhisperProgress,
-        componentWhisperStatus,
-    );
-    renderComponent(
-        values,
-        "base_model",
-        transcriberModelPath,
-        componentModelProgress,
-        componentModelStatus,
-    );
-    renderComponent(
-        values,
-        "tinydiarize_model",
-        transcriberTdrzPath,
-        componentTdrzProgress,
-        componentTdrzStatus,
-    );
-    updateTranscriberWhisperLocalStatus(latestStatus, values);
-}
-
-function renderComponent(values, key, pathEl, progressEl, statusEl) {
-    const prefix = `component.${key}.`;
-    const status = values[`${prefix}status`] || "missing";
-    const progress = Math.max(0, Math.min(100, Number(values[`${prefix}progress`] || 0)));
-    const downloaded = Number(values[`${prefix}bytes_downloaded`] || 0);
-    const total = Number(values[`${prefix}bytes_total`] || 0);
-    const error = values[`${prefix}error`] || "";
-    const note = values[`${prefix}note`] || "";
-    const path = values[`${prefix}path`] || "Not set";
-    const abi = values[`${prefix}abi`] || "";
-    const build = values[`${prefix}build`] || "";
-    const whisperRef = values[`${prefix}whisper_ref`] || "";
-    const detail = [status, abi, build, whisperRef].filter(Boolean).join(", ");
-    const shownProgress = status === "ready" ? 100 : progress;
-    const source = formatComponentSource(values, prefix);
-    const progressWrap = progressEl?.parentElement;
-    const hideDetails = (status === "ready" || status === "optional") && !error;
-
-    pathEl.textContent = `${path} (${detail})`;
-    progressEl.style.width = `${shownProgress}%`;
-    if (progressWrap) {
-        progressWrap.hidden = hideDetails || status === "optional";
-    }
-    statusEl.textContent = hideDetails
-        ? (status === "ready" ? "Installed and ready" : note || "Optional for this preparation mode")
-        : error
-            ? `${status}: ${error} • ${source}`
-            : note && status === "optional"
-                ? `${note} • ${source}`
-                : `${status} • ${formatBytes(downloaded)} / ${formatBytes(total)} • ${shownProgress}% • ${source}`;
-}
-
-function formatComponentSource(values, prefix) {
-    const sourceKind = values[`${prefix}source_kind`] || "";
-    const sourceDetail = values[`${prefix}source_detail`] || "";
-    const url = values[`${prefix}url`] || "";
-    const manifestUrl = values[`${prefix}manifest_url`] || "";
-    const localPath = values[`${prefix}local_path`] || "";
-
-    if (sourceKind === "local") {
-        return `Local package • ${basename(sourceDetail || localPath || "whisper-cli")}`;
-    }
-    if (sourceKind === "manifest") {
-        if (sourceDetail && manifestUrl && sourceDetail !== manifestUrl) {
-            return `ABI auto-select • ${basename(sourceDetail)} via manifest`;
-        }
-        return `ABI auto-select • ${manifestUrl || "Manifest not set"}`;
-    }
-    if (sourceKind === "url") {
-        return `Direct URL • ${sourceDetail || url || "Not set"}`;
-    }
-
-    return sourceDetail || localPath || url || manifestUrl || "No source configured";
-}
-
-function updateTranscriberWhisperLocalStatus(values = latestStatus, components = latestComponentsStatus) {
-    if (!transcriberWhisperLocalStatus) {
-        return;
-    }
-
-    const typedPath = transcriberWhisperLocalPath?.value.trim() || "";
-    const savedPath = values["transcriber.whisper_local_path"] || components["component.whisper_cli.local_path"] || "";
-    if (!transcriberWhisperLocalEnabled?.checked && !savedPath) {
-        transcriberWhisperLocalStatus.textContent =
-            "Optional. Leave this off to use the recommended package for this device.";
-        return;
-    }
-
-    if (typedPath && typedPath !== savedPath) {
-        transcriberWhisperLocalStatus.textContent =
-            `${typedPath} • save transcriber settings to use this package`;
-        return;
-    }
-
-    const localPath = savedPath;
-    const componentStatus = components["component.whisper_cli.status"] || "missing";
-    const componentError = components["component.whisper_cli.error"] || "";
-    const componentSize = Number(components["component.whisper_cli.bytes_total"] || 0);
-
-    if (!localPath) {
-        transcriberWhisperLocalStatus.textContent =
-            "Optional. Enter a full path only if you want to use your own whisper.cpp CLI package.";
-        return;
-    }
-
-    const stateText = componentError
-        ? componentError
-        : componentStatus === "selected"
-            ? "ready to install"
-            : componentStatus === "ready"
-                ? "installed source"
-                : "local source selected";
-    const sizeText = componentSize > 0 ? ` • ${formatBytes(componentSize)}` : "";
-    transcriberWhisperLocalStatus.textContent = `${localPath}${sizeText} • ${stateText}`;
-}
-
-function renderTranscriberRecordings(recordings) {
-    transcriberRecordingList.textContent = "";
-
-    if (!recordings.length) {
-        const empty = document.createElement("p");
-        empty.className = "entry-empty";
-        empty.textContent = "No recording files found.";
-        transcriberRecordingList.appendChild(empty);
-        return;
-    }
-
-    const shown = recordings.slice(0, transcriberRecordingVisibleCount);
-    for (const recording of shown) {
-        const card = document.createElement("label");
-        card.className = "entry-card compact";
-
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.value = recording.path;
-        checkbox.dataset.conflict = recording.selectedTranscriptExists ? "1" : "0";
-        card.appendChild(checkbox);
-
-        const body = document.createElement("div");
-        const title = document.createElement("strong");
-        title.textContent = recording.name;
-        body.appendChild(title);
-
-        const meta = document.createElement("div");
-        meta.className = "entry-meta";
-        meta.textContent = `${formatBytes(recording.sizeBytes)} • ${formatChannelSummary(recording.audioChannels)} • ${formatTimestamp(recording.modifiedAt)}`;
-        body.appendChild(meta);
-
-        const detail = document.createElement("div");
-        detail.className = "entry-meta secondary";
-        detail.textContent = recording.selectedTranscriptExists ? "Transcript exists" : "No matching transcript";
-        body.appendChild(detail);
-
-        card.appendChild(body);
-        transcriberRecordingList.appendChild(card);
-    }
-
-    renderListFooter(transcriberRecordingList, shown.length, recordings.length, () => {
-        transcriberRecordingVisibleCount += 120;
-        renderTranscriberRecordings(recordings);
-    });
-}
-
-function renderTranscriberQueue(jobs) {
-    transcriberQueueList.textContent = "";
-
-    if (!jobs.length) {
-        const empty = document.createElement("p");
-        empty.className = "entry-empty";
-        empty.textContent = "No queued transcription jobs.";
-        transcriberQueueList.appendChild(empty);
-        return;
-    }
-
-    const shown = jobs.slice(0, transcriberQueueVisibleCount);
-    for (const job of shown) {
-        const card = document.createElement("article");
-        card.className = "entry-card compact";
-
-        const head = document.createElement("div");
-        head.className = "entry-head";
-
-        const titleWrap = document.createElement("div");
-        const title = document.createElement("strong");
-        title.textContent = basename(job.recordingPath);
-        titleWrap.appendChild(title);
-
-        const meta = document.createElement("div");
-        meta.className = "entry-meta";
-        meta.textContent = `${job.language || "en"} • ${job.format || "txt"} • ${job.diarizationMode || "pending"}`;
-        titleWrap.appendChild(meta);
-
-        const status = document.createElement("span");
-        status.className = `entry-status ${job.status}`;
-        status.textContent = job.status || "unknown";
-
-        head.appendChild(titleWrap);
-        head.appendChild(status);
-        card.appendChild(head);
-
-        const details = document.createElement("div");
-        details.className = "entry-details";
-        details.innerHTML = `
-            <div><span class="label">Progress</span><strong>${Number(job.progress || 0)}%</strong></div>
-            <div><span class="label">Started</span><strong>${job.startedAt ? formatTimestamp(job.startedAt) : "Not started yet"}</strong></div>
-            <div><span class="label">Completed</span><strong>${job.completedAt ? formatTimestamp(job.completedAt) : "Not finished yet"}</strong></div>
-        `;
-        if (job.error) {
-            const errorLine = document.createElement("div");
-            errorLine.innerHTML = `<span class="label">Error</span><strong>${job.error}</strong>`;
-            details.appendChild(errorLine);
-        }
-        if (job.transcriptPath) {
-            const pathMeta = document.createElement("div");
-            pathMeta.className = "entry-meta secondary";
-            pathMeta.textContent = job.transcriptPath;
-            details.appendChild(pathMeta);
-        }
-        card.appendChild(details);
-
-        const actions = document.createElement("div");
-        actions.className = "entry-actions";
-
-        if (job.transcriptPath && (job.status === "succeeded" || job.status === "skipped")) {
-            const open = document.createElement("button");
-            open.className = "ghost";
-            open.type = "button";
-            open.textContent = "Open";
-            open.addEventListener("click", async () => {
-                await openTranscript(job.transcriptPath);
-            });
-            actions.appendChild(open);
-        }
-
-        if (job.status === "queued") {
-            const remove = document.createElement("button");
-            remove.className = "ghost danger";
-            remove.type = "button";
-            remove.textContent = "Remove";
-            remove.addEventListener("click", async () => {
-                await removeTranscriberJob(job.id);
-            });
-            actions.appendChild(remove);
-        }
-
-        if (actions.childElementCount) {
-            card.appendChild(actions);
-        }
-
-        transcriberQueueList.appendChild(card);
-    }
-
-    renderListFooter(transcriberQueueList, shown.length, jobs.length, () => {
-        transcriberQueueVisibleCount += 120;
-        renderTranscriberQueue(jobs);
-    });
-}
-
-async function saveTranscriberConfig() {
-    const wasEnabled = latestStatus["transcriber.enabled"] === "1";
-    const willEnable = transcriberEnabled.checked;
-    const output = transcriberOutputDir.value.trim() || `${outputDir.value.trim() || DEFAULT_OUTPUT_DIR}/transcripts`;
-    const language = transcriberLanguage.value || "en";
-    const speakerSelfName = transcriberSpeakerSelfName.value.trim() || "Speaker A";
-    const format = transcriberOutputFormat.value || "txt";
-    const whisperManifestUrl = latestStatus["transcriber.whisper_manifest_url"] || DEFAULT_WHISPER_MANIFEST_URL;
-    const whisperLocalPath = transcriberWhisperLocalEnabled.checked
-        ? transcriberWhisperLocalPath.value.trim()
-        : "";
-    const modelUrl = transcriberModelUrlEnabled.checked
-        ? transcriberModelUrl.value.trim()
-        : (transcriberModelPreset.value || "");
-    const tdrzUrl = transcriberTdrzUrlEnabled.checked
-        ? transcriberTdrzUrl.value.trim()
-        : (transcriberTdrzPreset.value || "");
-
-    if (transcriberWhisperLocalEnabled.checked && !whisperLocalPath) {
-        throw new Error("Enter a local whisper.cpp CLI package path or turn off the local package override.");
-    }
-    if (transcriberModelUrlEnabled.checked && !modelUrl) {
-        throw new Error("Enter a custom Whisper model URL or turn off the custom Whisper model override.");
-    }
-    if (transcriberTdrzUrlEnabled.checked && !tdrzUrl) {
-        throw new Error("Enter a custom TinyDiarize model URL or turn off the custom TinyDiarize override.");
-    }
-
-    if (!wasEnabled && willEnable) {
-        const confirmed = await requestChoice({
-            title: "Enable Transcriber",
-            message: "This enables offline transcription. Prepare the required components before starting jobs.",
-            actions: [
-                { label: "Enable", value: "enable", className: "" },
-                { label: "Cancel", value: "cancel", className: "ghost" },
-            ],
-        });
-        if (confirmed.value !== "enable") {
-            transcriberEnabled.checked = false;
-            return;
-        }
-    }
-
-    if (wasEnabled && !willEnable) {
-        const choice = await requestChoice({
-            title: "Disable Transcriber",
-            message: "Disable the transcription queue and keep existing transcripts.",
-            checkboxLabel: "Also remove downloaded transcriber components",
-            actions: [
-                { label: "Disable", value: "disable", className: "danger" },
-                { label: "Cancel", value: "cancel", className: "ghost" },
-            ],
-        });
-        if (choice.value !== "disable") {
-            transcriberEnabled.checked = true;
-            return;
-        }
-        if (choice.checked) {
-            await run("sh ./action.sh transcriber remove-deps");
-        }
-    }
-
-    await run(
-        [
-            `sh ./action.sh config set transcriber.enabled ${willEnable ? "1" : "0"}`,
-            `sh ./action.sh config set transcriber.output_dir ${shellQuote(output)}`,
-            `sh ./action.sh config set transcriber.language ${shellQuote(language)}`,
-            `sh ./action.sh config set transcriber.speaker_self_name ${shellQuote(speakerSelfName)}`,
-            `sh ./action.sh config set transcriber.output_format ${shellQuote(format)}`,
-            `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(whisperManifestUrl)}`,
-            `sh ./action.sh config set transcriber.whisper_url ''`,
-            `sh ./action.sh config set transcriber.whisper_local_path ${shellQuote(whisperLocalPath)}`,
-            `sh ./action.sh config set transcriber.model_url ${shellQuote(modelUrl)}`,
-            `sh ./action.sh config set transcriber.tinydiarize_model_url ${shellQuote(tdrzUrl)}`,
-        ].join(" && "),
-    );
-    await run("sh ./action.sh transcriber components-reset");
-
-    if (willEnable) {
-        await run("sh ./action.sh transcriber start-worker");
-    }
-
-    toast("Transcriber settings saved");
-    await refreshTranscriberAll();
-}
-
-async function queueSelectedRecordings() {
-    const selected = Array.from(transcriberRecordingList.querySelectorAll("input[type='checkbox']:checked"));
-    if (!selected.length) {
-        toast("Select one or more recordings");
-        return;
-    }
-
-    let conflictPolicy = "cancel";
-    if (selected.some((checkbox) => checkbox.dataset.conflict === "1")) {
-        const choice = await requestChoice({
-            title: "Transcript Exists",
-            message: "One or more selected recordings already have a matching transcript.",
-            actions: [
-                { label: "Skip Existing", value: "skip", className: "" },
-                { label: "Overwrite", value: "overwrite", className: "ghost" },
-                { label: "Cancel", value: "cancel", className: "ghost danger" },
-            ],
-        });
-        conflictPolicy = choice.value;
-        if (conflictPolicy === "cancel") {
-            return;
-        }
-    } else {
-        conflictPolicy = "skip";
-    }
-
-    const paths = selected.map((checkbox) => shellQuote(checkbox.value)).join(" ");
-    await run(`sh ./action.sh transcriber enqueue ${conflictPolicy} ${paths}`);
-    toast("Transcription job queued");
-    await refreshTranscriberAll();
-}
-
-async function transcriberControl(command) {
-    await run(`sh ./action.sh transcriber ${command}`);
-    await refreshTranscriberStatus();
-}
-
-async function removeTranscriberJob(id) {
-    await run(`sh ./action.sh transcriber remove ${shellQuote(id)}`);
-    await refreshTranscriberStatus();
-}
-
-async function openTranscript(path) {
-    const output = await run(`sh ./action.sh transcriber open-transcript ${shellQuote(path)}`);
-    toast(output || "Opening transcript");
-}
-
-function selectedRecordingCheckboxes() {
-    return Array.from(transcriberRecordingList.querySelectorAll("input[type='checkbox']"));
-}
-
-function isDebugEnabled() {
-    return debugEnabled ? debugEnabled.checked : latestStatus["debug.enabled"] === "1";
-}
-
-function setDebugOutputs(message) {
-    for (const output of [
-        debugTranscriberStatusOutput,
-        debugComponentsOutput,
-        debugJobsOutput,
-        debugTranscriberLogsOutput,
-    ]) {
-        if (output) {
-            output.textContent = message;
-        }
-    }
-}
-
-function formatCapturedCommand(result) {
-    const parts = [
-        `$ ${result.command}`,
-        `exit=${result.errno}`,
-    ];
-    if (result.stdout) {
-        parts.push("stdout:", result.stdout);
-    }
-    if (result.stderr) {
-        parts.push("stderr:", result.stderr);
-    }
-    if (!result.stdout && !result.stderr) {
-        parts.push("(no output)");
-    }
-    return parts.join("\n");
-}
-
-function renderJobsDebug(status) {
-    const queue = status.queue?.jobs || [];
-    const runtime = status.runtime || {};
-    const counts = queue.reduce((acc, job) => {
-        const key = job.status || "unknown";
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-    }, {});
-    const lines = [
-        `runtime.state=${runtime.state || "unknown"}`,
-        `runtime.progress=${runtime.progress ?? 0}`,
-        `runtime.etaSeconds=${runtime.etaSeconds ?? ""}`,
-        `runtime.error=${runtime.error || ""}`,
-        `queue.total=${queue.length}`,
-        `queue.counts=${JSON.stringify(counts)}`,
-        "",
-    ];
-
-    if (!queue.length) {
-        lines.push("No queued transcription jobs.");
-        return lines.join("\n");
-    }
-
-    for (const job of queue) {
-        lines.push([
-            job.id || "unknown-id",
-            job.status || "unknown",
-            `${job.progress ?? 0}%`,
-            job.startedAt ? `started=${job.startedAt}` : "",
-            job.completedAt ? `completed=${job.completedAt}` : "",
-            job.error ? `error=${job.error}` : "",
-            job.recordingPath || job.inputPath || "",
-            job.transcriptPath || job.outputPath || "",
-        ].filter(Boolean).join(" | "));
-    }
-
-    return lines.join("\n");
-}
-
-function rememberDebugError(title, error) {
-    if (!isDebugEnabled() || !debugTranscriberStatusOutput) {
-        return;
-    }
-
-    const detail = error instanceof Error ? error.message : String(error);
-    const timestamp = timestampFormatter.format(new Date());
-    const previous = debugTranscriberStatusOutput.textContent || "";
-    debugTranscriberStatusOutput.textContent = [
-        `[${timestamp}] ${title}`,
-        detail,
-        previous && previous !== "Debug tracking is disabled." ? `\n${previous}` : "",
-    ].filter(Boolean).join("\n");
-}
-
-function updateDebugControls() {
-    const enabled = isDebugEnabled();
-    if (debugStatusBadge) {
-        debugStatusBadge.textContent = enabled ? "On" : "Off";
-        debugStatusBadge.classList.toggle("recording", enabled);
-    }
-
-    for (const selector of [
-        "#refresh-button",
-        "#restart-button",
-        "#probe-button",
-        "#logs-button",
-        "#refresh-transcriber-debug-button",
-    ]) {
-        const button = document.querySelector(selector);
-        if (button) {
-            button.disabled = !enabled;
-        }
-    }
-
-    if (!enabled) {
-        setDebugOutputs("Debug tracking is disabled.");
-    } else if (activeTabName === "debug" && debugTranscriberStatusOutput?.textContent === "Debug tracking is disabled.") {
-        setDebugOutputs("Debug tracking is enabled. Use Refresh Transcriber Debug when needed.");
-    }
-}
-
-async function refreshTranscriberDebug() {
-    if (!isDebugEnabled()) {
-        setDebugOutputs("Debug tracking is disabled.");
-        return;
-    }
-
-    debugComponentsOutput.textContent = "Refreshing component status...";
-    const components = await runCapture("sh ./action.sh transcriber components-status");
-    debugComponentsOutput.textContent = formatCapturedCommand(components);
-
-    if (components.ok) {
-        latestComponentsStatus = parseStatus(components.stdout);
-        renderTranscriberComponents(latestComponentsStatus);
-    }
-
-    debugTranscriberStatusOutput.textContent = "Refreshing transcriber status...";
-    const status = await runCapture("sh ./action.sh transcriber status");
-    if (!status.ok) {
-        debugTranscriberStatusOutput.textContent = formatCapturedCommand(status);
-        debugJobsOutput.textContent = "Transcriber status command failed; jobs could not be read.";
-    } else {
-        try {
-            const parsed = JSON.parse(status.stdout || "{}");
-            latestTranscriberStatus = parsed;
-            debugTranscriberStatusOutput.textContent = JSON.stringify(parsed, null, 2);
-            debugJobsOutput.textContent = renderJobsDebug(parsed);
-        } catch (error) {
-            debugTranscriberStatusOutput.textContent = [
-                String(error.message || error),
-                "",
-                formatCapturedCommand(status),
-            ].join("\n");
-            debugJobsOutput.textContent = "Transcriber status JSON could not be parsed.";
-        }
-    }
-
-    debugTranscriberLogsOutput.textContent = "Refreshing transcriber logs...";
-    const logs = await runCapture("sh ./action.sh transcriber logs");
-    debugTranscriberLogsOutput.textContent = logs.stdout || logs.stderr || "No transcriber logs yet.";
-}
-
-async function saveDebugConfig() {
-    await run(`sh ./action.sh config set debug.enabled ${debugEnabled.checked ? "1" : "0"}`);
-    await refreshStatus();
-    updateDebugControls();
-    if (isDebugEnabled()) {
-        setDebugOutputs("Debug tracking is enabled. Use Refresh Transcriber Debug when needed.");
-        toast("Debug tracking enabled");
-    } else {
-        setDebugOutputs("Debug tracking is disabled.");
-        toast("Debug tracking disabled");
-    }
+const DEFAULT_MANIFEST_URL = "https://github.com/wjdob/BCR-Headless/releases/download/transcriber-tools/transcriber-tools.env";
+const COMPONENT_KEYS = ["whisper_cli", "base_model", "tinydiarize_model"];
+const VIEW_INFO = {
+    recorder: { title: "Recorder", kicker: "Call recording" },
+    library: { title: "Library", kicker: "Saved calls" },
+    transcriber: { title: "Transcribe", kicker: "Offline processing" },
+    diagnostics: { title: "Diagnostics", kicker: "Module health" },
+};
+const LANGUAGES = [
+    ["en", "English"], ["auto", "Auto detect"], ["es", "Spanish"], ["fr", "French"], ["de", "German"],
+    ["it", "Italian"], ["pt", "Portuguese"], ["pl", "Polish"], ["nl", "Dutch"], ["tr", "Turkish"],
+    ["cs", "Czech"], ["uk", "Ukrainian"], ["ru", "Russian"], ["ar", "Arabic"], ["hi", "Hindi"],
+    ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"],
+];
+
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const activeRefreshes = new Map();
+let searchTimer = null;
+
+function basename(path) {
+    const parts = String(path || "").split(/[\\/]/);
+    return parts.at(-1) || "Unknown file";
 }
 
 function formatBytes(value) {
-    const size = Number(value || 0);
-    if (size < 1024) {
-        return `${size} B`;
-    }
-    if (size < 1024 * 1024) {
-        return `${(size / 1024).toFixed(1)} KB`;
-    }
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    const bytes = Math.max(0, Number(value) || 0);
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function formatDate(value, fallback = "Not started") {
+    if (!value) return fallback;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : dateFormatter.format(date);
+}
+
+function formatElapsed(start, end = Date.now()) {
+    if (!start) return "Not started";
+    const started = new Date(start).getTime();
+    const finished = typeof end === "number" ? end : new Date(end).getTime();
+    if (!Number.isFinite(started) || !Number.isFinite(finished)) return "Unknown";
+    const seconds = Math.max(0, Math.round((finished - started) / 1000));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remaining = seconds % 60;
+    if (hours) return `${hours}h ${minutes}m`;
+    if (minutes) return `${minutes}m ${remaining}s`;
+    return `${remaining}s`;
 }
 
 function formatEta(seconds) {
-    const total = Math.max(0, Number(seconds) || 0);
-    const mins = Math.floor(total / 60);
-    const secs = Math.round(total % 60);
-    if (mins <= 0) {
-        return `${secs}s`;
+    const total = Number(seconds);
+    if (!Number.isFinite(total) || total <= 0) return "No active estimate";
+    if (total < 60) return `About ${Math.ceil(total)} seconds remaining`;
+    return `About ${Math.ceil(total / 60)} minutes remaining`;
+}
+
+function titleCase(value) {
+    return String(value || "unknown").replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatRaw(values) {
+    return Object.keys(values || {}).sort().map((key) => `${key}=${values[key]}`).join("\n") || "No data returned.";
+}
+
+function statusTone(status) {
+    if (["ready", "running", "recording", "succeeded", "completed", "complete"].includes(status)) return "success";
+    if (["failed", "error", "cancelled", "missing", "stopped"].includes(status)) return "danger";
+    if (["queued", "paused", "preparing", "downloading", "stopping", "skipped"].includes(status)) return "warning";
+    return "neutral";
+}
+
+function currentMode(status = appState.status) {
+    return status["recording.stereo"] === "0" ? "mono" : "stereo";
+}
+
+function currentFilter() {
+    return appState.activeView === "library" ? appState.filters.library : appState.filters.transcriber;
+}
+
+async function withPending(button, task, pendingLabel) {
+    setPending(button, true, pendingLabel);
+    try {
+        return await task();
+    } catch (error) {
+        showActionError(error);
+        return undefined;
+    } finally {
+        setPending(button, false);
     }
-    return `${mins}m ${secs}s`;
 }
 
-function transcriberHasActiveJobs(status = latestTranscriberStatus) {
-    const jobs = status?.queue?.jobs || [];
-    return jobs.some((job) => job.status === "queued" || job.status === "running");
+function showActionError(error) {
+    const message = String(error?.message || error || "The action could not be completed.");
+    $("#action-error-message").textContent = message;
+    $("#action-error").hidden = false;
 }
 
-function transcriberRuntimeNeedsPolling(status = latestTranscriberStatus) {
-    const runtimeState = status?.runtime?.state || "";
-    return ["running", "resuming", "paused", "stopping"].includes(runtimeState);
+function dismissActionError() {
+    $("#action-error").hidden = true;
+    $("#action-error-message").textContent = "";
 }
 
-function shouldPollTranscriber() {
-    if (activeTabName !== "transcriber") {
-        return false;
-    }
-
-    return latestComponentsStatus["transcriber.components.running"] === "1" ||
-        transcriberHasActiveJobs() ||
-        transcriberRuntimeNeedsPolling();
-}
-
-function updateTranscriberPolling() {
-    if (shouldPollTranscriber()) {
-        startComponentPolling();
-    } else {
-        stopComponentPolling();
-    }
-}
-
-function startComponentPolling() {
-    if (componentPollTimer || activeTabName !== "transcriber") {
-        return;
-    }
-
-    componentPollTimer = window.setInterval(async () => {
-        if (componentPollInFlight) {
-            return;
+function setView(view, { refresh = true } = {}) {
+    if (!VIEW_INFO[view]) view = "recorder";
+    rememberView(view);
+    for (const section of $$(".view")) section.hidden = section.id !== `${view === "transcriber" ? "transcribe" : view}-view`;
+    for (const button of $$(`[data-view-target]`)) {
+        const active = button.dataset.viewTarget === view;
+        button.classList.toggle("is-active", active);
+        if (button.getAttribute("role") === "tab") {
+            button.setAttribute("aria-selected", String(active));
+            button.tabIndex = active ? 0 : -1;
+        } else if (active) {
+            button.setAttribute("aria-current", "page");
+        } else {
+            button.removeAttribute("aria-current");
         }
-
-        if (!shouldPollTranscriber()) {
-            stopComponentPolling();
-            return;
-        }
-
-        componentPollInFlight = true;
-        try {
-            await refreshTranscriberStatus();
-            if (latestComponentsStatus["transcriber.components.running"] === "1") {
-                await refreshTranscriberComponentsStatus();
-            }
-        } catch (error) {
-            stopComponentPolling();
-            rememberDebugError("Component status refresh failed", error);
-        } finally {
-            componentPollInFlight = false;
-        }
-    }, 3000);
+    }
+    $("#view-title").textContent = VIEW_INFO[view].title;
+    $("#view-kicker").textContent = VIEW_INFO[view].kicker;
+    stopPolling();
+    if (refresh) refreshActiveView();
 }
 
-function stopComponentPolling() {
-    if (!componentPollTimer) {
-        return;
-    }
-
-    window.clearInterval(componentPollTimer);
-    componentPollTimer = null;
-    componentPollInFlight = false;
+function showInitialLoading(view) {
+    const target = view === "library" ? $("#library-list") : view === "transcriber" ? $("#queue-list") : null;
+    if (target && !appState.latestSnapshots.has(view)) showListState(target, "Loading current module state...", "loading");
 }
 
-function closeConfirmOverlay(confirmed) {
-    if (confirmOverlay) {
-        confirmOverlay.hidden = true;
-        confirmOverlay.classList.remove("open");
-    }
-
-    if (confirmResolver) {
-        const resolver = confirmResolver;
-        confirmResolver = null;
-        resolver(confirmed);
-    }
-}
-
-function requestClearLogConfirmation() {
-    if (!confirmOverlay) {
-        return Promise.resolve(true);
-    }
-
-    confirmOverlay.hidden = false;
-    confirmOverlay.classList.add("open");
-
-    return new Promise((resolve) => {
-        confirmResolver = resolve;
-    });
-}
-
-function closeChoiceOverlay(result) {
-    if (choiceOverlay) {
-        choiceOverlay.hidden = true;
-        choiceOverlay.classList.remove("open");
-    }
-
-    if (choiceResolver) {
-        const resolver = choiceResolver;
-        choiceResolver = null;
-        resolver(result);
-    }
-}
-
-function requestChoice({ title, message, checkboxLabel = null, actions }) {
-    if (!choiceOverlay) {
-        return Promise.resolve({ value: actions[0]?.value, checked: false });
-    }
-
-    choiceTitle.textContent = title;
-    choiceMessage.textContent = message;
-    choiceActions.textContent = "";
-    choiceCheckbox.checked = false;
-
-    if (checkboxLabel) {
-        choiceCheckboxRow.hidden = false;
-        choiceCheckboxLabel.textContent = checkboxLabel;
-    } else {
-        choiceCheckboxRow.hidden = true;
-        choiceCheckboxLabel.textContent = "";
-    }
-
-    for (const action of actions) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = action.label;
-        if (action.className) {
-            button.className = action.className;
-        }
-        button.addEventListener("click", () => {
-            closeChoiceOverlay({
-                value: action.value,
-                checked: choiceCheckbox.checked,
-            });
+async function refreshActiveView({ forceForm = false, silent = false } = {}) {
+    const view = appState.activeView;
+    const filter = currentFilter();
+    const requestKey = `${view}:${JSON.stringify(filter)}`;
+    if (activeRefreshes.has(requestKey)) return activeRefreshes.get(requestKey);
+    const serial = ++appState.requestSerial;
+    if (!silent) showInitialLoading(view);
+    const refreshButton = $("#refresh-view-button");
+    setPending(refreshButton, true, "Refreshing");
+    const request = getSnapshot(view, filter)
+        .then((snapshot) => {
+            if (serial !== appState.requestSerial || view !== appState.activeView) return;
+            applySnapshot(view, snapshot, forceForm);
+            appState.latestSnapshots.set(view, snapshot);
+        })
+        .catch((error) => {
+            if (!silent) showActionError(error);
+            const target = view === "library" ? $("#library-list") : view === "transcriber" ? $("#queue-list") : null;
+            if (target) showListState(target, String(error.message || error), "error");
+        })
+        .finally(() => {
+            activeRefreshes.delete(requestKey);
+            setPending(refreshButton, false);
+            updatePolling();
         });
-        choiceActions.appendChild(button);
-    }
-
-    choiceOverlay.hidden = false;
-    choiceOverlay.classList.add("open");
-
-    return new Promise((resolve) => {
-        choiceResolver = resolve;
-    });
+    activeRefreshes.set(requestKey, request);
+    return request;
 }
 
-if (confirmOverlay) {
-    // KSUWebUI hosts do not always respect the raw `hidden` attribute on first
-    // paint, so force the modal into a closed state during startup.
-    confirmOverlay.hidden = true;
-    confirmOverlay.classList.remove("open");
+function applySnapshot(view, snapshot, forceForm) {
+    appState.status = snapshot.status || {};
+    if (snapshot.transcriber) appState.transcriber = snapshot.transcriber;
+    if (snapshot.components) appState.components = snapshot.components;
+    if (snapshot.recordings) appState.recordings = snapshot.recordings;
+    if (snapshot.recordingLog) appState.recordingLog = snapshot.recordingLog;
+    renderGlobalStatus();
+    if (forceForm || !appState.dirtySections.has("recorder")) populateRecorderForm();
+    if (forceForm || !appState.dirtySections.has("transcriber")) populateTranscriberForm();
+    if (view === "recorder") renderRecorder();
+    if (view === "library") renderLibrary();
+    if (view === "transcriber") renderTranscriber();
+    if (view === "diagnostics") renderDiagnostics(snapshot);
 }
 
-if (choiceOverlay) {
-    choiceOverlay.hidden = true;
-    choiceOverlay.classList.remove("open");
+function renderGlobalStatus() {
+    const status = appState.status;
+    const running = status["daemon.running"] === "1";
+    const enabled = status["recording.enabled"] === "1";
+    const label = !enabled ? "Recording off" : running ? "Recorder ready" : "Daemon stopped";
+    const pill = $("#global-status");
+    pill.replaceChildren(element("span", { className: "status-dot" }), document.createTextNode(label));
+    pill.className = `status-pill status-${!enabled ? "neutral" : running ? "success" : "danger"}`;
+    $("#module-version").textContent = status["module.version"] || (IS_MOCK ? "1.3.0-test.1 mock" : "1.3.0-test.1");
 }
 
-async function runDiagnostic(command, emptyMessage) {
-    const output = await run(`sh ./action.sh ${command}`);
-    diagnosticOutput.textContent = output || emptyMessage;
+function renderRecorder() {
+    const status = appState.status;
+    const running = status["daemon.running"] === "1";
+    const enabled = status["recording.enabled"] === "1";
+    $("#recorder-daemon-state").textContent = running ? "Running" : "Stopped";
+    $("#recorder-runtime-state").textContent = enabled ? titleCase(status["recorder.state"] || "ready") : "Disabled";
+    $("#recorder-capture-state").textContent = currentMode(status) === "stereo" ? "Stereo" : "Mono fallback";
+    $("#recorder-format-state").textContent = ({ wav: "WAV / PCM", opus: "OGG / Opus", aac: "M4A / AAC" })[status["recording.format"]] || String(status["recording.format"] || "WAV").toUpperCase();
+    const lastPath = status["last.output"] || "";
+    $("#last-recording-name").textContent = lastPath ? basename(lastPath) : "No recordings yet";
+    $("#last-recording-result").textContent = status["last.result"] || "Waiting for a completed call";
+    $("#open-last-recording-button").disabled = !lastPath;
+    const output = status["output.dir"] || DEFAULT_OUTPUT_DIR;
+    $("#recorder-output-path").textContent = output;
+    const exists = status["output.dir.exists"] === "1";
+    const writable = status["output.dir.writable"] === "1";
+    const free = formatBytes(status["output.dir.free_bytes"]);
+    $("#recorder-output-health").textContent = !exists ? `Will be created · ${free} available` : !writable ? "Folder is not writable" : `${free} available`;
 }
 
-recorderTab.addEventListener("click", () => setActiveTab("recorder"));
-recordingsTab.addEventListener("click", async () => {
-    setActiveTab("recordings");
-    try {
-        await refreshRecordingLog();
-    } catch (error) {
-        toast(String(error.message || error));
-    }
-});
-transcriberTab.addEventListener("click", async () => {
-    setActiveTab("transcriber");
-    setBusy(true);
-    try {
-        await refreshTranscriberAll();
-    } catch (error) {
-        rememberDebugError("Transcriber tab refresh failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-debugTab.addEventListener("click", async () => {
-    setActiveTab("debug");
-    if (isDebugEnabled() && debugTranscriberStatusOutput?.textContent === "Debug tracking is disabled.") {
-        setDebugOutputs("Debug tracking is enabled. Use Refresh Transcriber Debug when needed.");
-    }
-});
+function populateRecorderForm() {
+    const status = appState.status;
+    $("#recording-enabled").checked = status["recording.enabled"] === "1";
+    $("#recording-log-enabled").checked = status["recording.log_enabled"] !== "0";
+    const radio = $(`input[name="recording-mode"][value="${currentMode(status)}"]`);
+    if (radio) radio.checked = true;
+    const format = status["recording.format"] || "wav";
+    const available = new Set((status["recording.available_formats"] || "wav").split(",").map((item) => item.trim()));
+    for (const option of $("#recording-format").options) option.disabled = !available.has(option.value);
+    $("#recording-format").value = format;
+    $("#output-dir").value = status["output.dir"] || DEFAULT_OUTPUT_DIR;
+    $("#min-duration").value = status["recording.min_duration"] || "0";
+    const supported = status["recording.voice_call_stereo_supported"] === "1";
+    const note = status["recording.voice_call_probe_note"] || "Capability check is not available.";
+    $("#recording-mode-note").textContent = `${supported ? "Stereo detected" : "Mono fallback detected"}. ${note}`;
+}
 
-document.querySelector("#refresh-status-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await refreshStatus();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
+function recordingLogFor(path) {
+    return appState.recordingLog.find((entry) => entry.output === path || entry.path === path) || null;
+}
 
-lastOutputTile?.addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await openLastOutputTarget();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-lastOutputTile?.addEventListener("keydown", async (event) => {
-    if (event.key !== "Enter" && event.key !== " ") {
-        return;
-    }
-
-    event.preventDefault();
-    setBusy(true);
-    try {
-        await openLastOutputTarget();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#save-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await saveConfigAndRestart();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#reset-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await resetDefaults();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#open-output-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await openOutputDirectory();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#refresh-log-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await refreshRecordingLog();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#clear-log-button").addEventListener("click", async () => {
-    try {
-        const confirmed = await requestClearLogConfirmation();
-        if (!confirmed) {
-            return;
-        }
-
-        setBusy(true);
-        await clearRecordingLog();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#refresh-transcriber-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await refreshTranscriberAll();
-        await refreshTranscriberComponentMetadata({ silent: true });
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#save-transcriber-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await saveTranscriberConfig();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#open-transcriber-output-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        const output = await run("sh ./action.sh open-transcript-output-dir");
-        toast(output || "Opening transcript folder");
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-transcriberWhisperLocalPath?.addEventListener("input", () => {
-    updateTranscriberWhisperLocalStatus();
-});
-recordingMode?.addEventListener("change", () => {
-    updateRecordingModeNote(latestStatus);
-});
-transcriberWhisperLocalEnabled?.addEventListener("change", () => {
-    syncTranscriberAdvancedFields();
-    updateTranscriberWhisperLocalStatus();
-});
-transcriberModelUrlEnabled?.addEventListener("change", () => {
-    syncTranscriberAdvancedFields();
-});
-transcriberTdrzUrlEnabled?.addEventListener("change", () => {
-    syncTranscriberAdvancedFields();
-});
-
-document.querySelector("#install-transcriber-deps-button").addEventListener("click", async () => {
-    try {
-        await refreshTranscriberComponentMetadata({ silent: false });
-    } catch (error) {
-        toast(String(error.message || error));
-        return;
-    }
-
-    const recorderMode = getSavedRecorderMode(latestStatus);
-    const stereoEstimate = getPrepareEstimateBytes(PREPARE_PROFILE_STEREO, latestComponentsStatus);
-    const monoEstimate = getPrepareEstimateBytes(PREPARE_PROFILE_MONO, latestComponentsStatus);
-    const whisperModelLabel = transcriberModelUrlEnabled.checked
-        ? "your custom Whisper model"
-        : (transcriberModelPreset.selectedOptions[0]?.textContent || "the selected Whisper model");
-    const tdrzModelLabel = transcriberTdrzUrlEnabled.checked
-        ? "your custom TinyDiarize model"
-        : (transcriberTdrzPreset.selectedOptions[0]?.textContent || "the selected TinyDiarize model");
-    const choice = await requestChoice({
-        title: "Prepare Components",
-        message:
-            `Choose a component set. ` +
-            `Stereo downloads the device package plus ${whisperModelLabel} ` +
-            `(${formatBytes(stereoEstimate)}). ` +
-            `Mono fallback downloads the device package plus ${tdrzModelLabel} ` +
-            `(${formatBytes(monoEstimate)}). ` +
-            `Current recorder mode: ${getRecorderModeLabel(recorderMode)}.`,
-        actions: [
-            { label: "Stereo", value: PREPARE_PROFILE_STEREO, className: "" },
-            { label: "Mono fallback", value: PREPARE_PROFILE_MONO, className: "ghost" },
-            { label: "Cancel", value: "cancel", className: "ghost" },
-        ],
+function makeRecordingRow(recording, { compact = false } = {}) {
+    const row = element("article", { className: "data-row" });
+    const selectLabel = element("label", { className: "row-select", title: `Select ${recording.name}` });
+    const checkbox = element("input", { type: "checkbox", attributes: { "aria-label": `Select ${recording.name}` } });
+    checkbox.value = recording.path;
+    checkbox.checked = appState.selectedRecordings.has(recording.path);
+    checkbox.addEventListener("change", () => {
+        if (checkbox.checked) appState.selectedRecordings.add(recording.path);
+        else appState.selectedRecordings.delete(recording.path);
+        rememberSelection();
+        updateSelectionUi();
     });
-    if (![PREPARE_PROFILE_STEREO, PREPARE_PROFILE_MONO].includes(choice.value)) {
+    selectLabel.appendChild(checkbox);
+
+    const main = element("div", { className: "row-main" });
+    main.appendChild(element("div", { className: "row-title", text: recording.name }));
+    const log = recordingLogFor(recording.path);
+    const meta = element("div", { className: "row-meta" });
+    meta.append(
+        element("span", { text: formatDate(recording.modifiedAt) }),
+        element("span", { text: formatBytes(recording.sizeBytes) }),
+        element("span", { text: Number(recording.audioChannels) >= 2 ? "Stereo" : Number(recording.audioChannels) === 1 ? "Mono" : "Channels unknown" }),
+    );
+    if (log?.direction) meta.appendChild(element("span", { text: titleCase(log.direction) }));
+    if (Number.isFinite(Number(log?.duration))) meta.appendChild(element("span", { text: formatElapsed(0, Number(log.duration) * 1000) }));
+    main.appendChild(meta);
+    const statuses = element("div", { className: "row-statuses" });
+    statuses.appendChild(recording.selectedTranscriptExists ? badge("Transcript ready", "success") : badge("No transcript", "neutral"));
+    if (!compact) statuses.appendChild(badge(String(recording.audioFormat || "audio").toUpperCase(), "neutral"));
+    main.appendChild(statuses);
+
+    const actions = element("div", { className: "row-actions" });
+    const openRecording = iconButton("play", "Open recording");
+    openRecording.addEventListener("click", () => withPending(openRecording, () => run(`sh ./action.sh open-recording ${shellQuote(recording.path)}`), "Opening"));
+    actions.appendChild(openRecording);
+    if (recording.selectedTranscriptExists) {
+        const preview = iconButton("eye", "Preview transcript");
+        preview.addEventListener("click", () => openTranscriptPreview(recording.selectedTranscriptPath, preview));
+        const openTranscript = iconButton("file-text", "Open transcript");
+        openTranscript.addEventListener("click", () => withPending(openTranscript, () => run(`sh ./action.sh transcriber open-transcript ${shellQuote(recording.selectedTranscriptPath)}`), "Opening"));
+        actions.append(preview, openTranscript);
+    }
+    row.append(selectLabel, main, actions);
+    return row;
+}
+
+function renderLibrary() {
+    const page = appState.recordings || { items: [], total: 0, offset: 0, limit: 40, hasMore: false };
+    const list = $("#library-list");
+    list.replaceChildren();
+    if (!page.items?.length) showListState(list, "No recordings match these filters.");
+    else for (const recording of page.items) list.appendChild(makeRecordingRow(recording));
+    const start = page.total ? page.offset + 1 : 0;
+    const end = page.offset + (page.items?.length || 0);
+    $("#library-result-count").textContent = `${start}-${end} of ${page.total} recordings`;
+    const pageNumber = Math.floor(page.offset / page.limit) + 1;
+    const pageCount = Math.max(1, Math.ceil(page.total / page.limit));
+    $("#library-page-label").textContent = `Page ${pageNumber} of ${pageCount}`;
+    $("#library-prev-button").disabled = page.offset <= 0;
+    $("#library-next-button").disabled = !page.hasMore;
+    updateSelectionUi();
+}
+
+function updateSelectionUi() {
+    const count = appState.selectedRecordings.size;
+    $("#library-selection-bar").hidden = count === 0;
+    $("#library-selection-count").textContent = `${count} selected`;
+    $("#transcriber-selection-count").textContent = `${count} selected`;
+    $("#library-queue-button").disabled = count === 0;
+    $("#queue-selected-button").disabled = count === 0;
+    for (const checkbox of $$(".row-select input")) checkbox.checked = appState.selectedRecordings.has(checkbox.value);
+}
+
+function populateTranscriberForm() {
+    const status = appState.status;
+    $("#transcriber-enabled").checked = status["transcriber.enabled"] === "1";
+    $("#transcriber-output-dir").value = status["transcriber.output_dir"] || `${status["output.dir"] || DEFAULT_OUTPUT_DIR}/transcripts`;
+    ensureSelectValue($("#transcriber-language"), status["transcriber.language"] || "en");
+    $("#transcriber-speaker-self-name").value = status["transcriber.speaker_self_name"] || "Speaker A";
+    $("#transcriber-speaker-remote-name").value = status["transcriber.speaker_remote_name"] || "Speaker B";
+    ensureSelectValue($("#transcriber-output-format"), status["transcriber.output_format"] || "txt");
+    const localPath = status["transcriber.whisper_local_path"] || "";
+    $("#transcriber-whisper-local-enabled").checked = Boolean(localPath);
+    $("#transcriber-whisper-local-path").value = localPath;
+    syncOverrideField("#transcriber-whisper-local-enabled", "#transcriber-whisper-local-field");
+    setPresetOrCustom("#transcriber-model-preset", "#transcriber-model-url-enabled", "#transcriber-model-url", "#transcriber-model-url-field", status["transcriber.model_url"] || "");
+    setPresetOrCustom("#transcriber-tdrz-preset", "#transcriber-tdrz-url-enabled", "#transcriber-tdrz-url", "#transcriber-tdrz-url-field", status["transcriber.tinydiarize_model_url"] || "");
+    updateModelCompatibility();
+}
+
+function ensureSelectValue(select, value) {
+    if (![...select.options].some((option) => option.value === value)) select.appendChild(element("option", { text: value, attributes: { value } }));
+    select.value = value;
+}
+
+function setPresetOrCustom(presetSelector, toggleSelector, inputSelector, fieldSelector, value) {
+    const preset = $(presetSelector);
+    const known = [...preset.options].some((option) => option.value === value);
+    $(toggleSelector).checked = !known && Boolean(value);
+    $(inputSelector).value = known ? "" : value;
+    if (known) preset.value = value;
+    $(fieldSelector).hidden = !$(toggleSelector).checked;
+}
+
+function syncOverrideField(toggleSelector, fieldSelector) {
+    $(fieldSelector).hidden = !$(toggleSelector).checked;
+}
+
+function updateModelCompatibility() {
+    const language = $("#transcriber-language").value || "en";
+    const custom = $("#transcriber-model-url-enabled").checked;
+    const url = custom ? $("#transcriber-model-url").value : $("#transcriber-model-preset").value;
+    const englishOnly = /\.en\.bin(?:$|\?)/i.test(url);
+    const note = $("#model-compatibility-note");
+    if (englishOnly && !["en", "auto"].includes(language)) {
+        note.textContent = "The selected English-only model does not match this source language.";
+        note.style.color = "var(--warning)";
+    } else {
+        note.textContent = englishOnly ? "Optimized for English recordings." : "Supports multilingual recordings.";
+        note.style.color = "";
+    }
+}
+
+function renderTranscriber() {
+    const transcriber = appState.transcriber || { dependencies: {}, queue: { jobs: [] }, runtime: {} };
+    const jobs = transcriber.queue?.jobs || [];
+    const mode = currentMode();
+    const ready = mode === "stereo" ? transcriber.dependencies?.readyForStereo : transcriber.dependencies?.readyForMonoDiarization;
+    $("#transcriber-engine-state").textContent = appState.status["transcriber.enabled"] !== "1" ? "Disabled" : ready ? "Ready" : "Components needed";
+    const counts = jobs.reduce((all, job) => ({ ...all, [job.status]: (all[job.status] || 0) + 1 }), {});
+    $("#transcriber-queue-state").textContent = jobs.length ? `${counts.running || 0} active · ${counts.queued || 0} queued` : "No jobs";
+    const runtime = transcriber.runtime || {};
+    const progress = Math.max(0, Math.min(100, Number(runtime.progress) || 0));
+    $("#transcriber-stage").textContent = titleCase(runtime.stage || runtime.state || "idle");
+    $("#transcriber-progress-label").textContent = `${progress}%`;
+    $("#transcriber-progress").value = progress;
+    $("#transcriber-progress").textContent = `${progress}%`;
+    $("#transcriber-eta").textContent = formatEta(runtime.etaSeconds);
+    const running = jobs.some((job) => job.status === "running");
+    const queued = jobs.some((job) => job.status === "queued");
+    $("#start-queue-button").disabled = !queued || running || appState.status["transcriber.enabled"] !== "1" || !ready;
+    $("#pause-queue-button").disabled = !running;
+    $("#resume-queue-button").disabled = runtime.state !== "paused" && (!queued || running);
+    $("#stop-queue-button").disabled = !running && !["stopping", "resuming"].includes(runtime.state);
+    renderQueue(jobs);
+    renderTranscriberRecordings();
+    renderComponents();
+}
+
+function renderQueue(jobs) {
+    const list = $("#queue-list");
+    list.replaceChildren();
+    if (!jobs.length) {
+        showListState(list, "No transcription jobs. Select recordings below to build a queue.");
         return;
     }
+    const visible = jobs.slice(0, 120);
+    visible.forEach((job, index) => list.appendChild(makeQueueRow(job, index, jobs)));
+    if (jobs.length > visible.length) list.appendChild(element("div", { className: "empty-state", text: `Showing the first ${visible.length} of ${jobs.length} jobs.` }));
+}
 
-    setBusy(true);
-    try {
-        const output = await run(`sh ./action.sh transcriber install-deps ${choice.value}`);
-        toast(output || "Component download started");
-        await refreshTranscriberComponentsStatus();
-        updateTranscriberPolling();
-    } catch (error) {
-        rememberDebugError("Prepare Components failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
+function makeQueueRow(job, index, jobs) {
+    const row = element("article", { className: "data-row" });
+    const main = element("div", { className: "row-main" });
+    main.appendChild(element("div", { className: "row-title", text: basename(job.recordingPath) }));
+    const statusLine = element("div", { className: "row-statuses" }, [badge(titleCase(job.status), statusTone(job.status)), badge(titleCase(job.diarizationMode || "pending"), "neutral")]);
+    main.appendChild(statusLine);
+    const meta = element("div", { className: "row-meta" });
+    meta.append(
+        element("span", { text: `Queued ${formatDate(job.createdAt)}` }),
+        element("span", { text: `Started ${formatDate(job.startedAt)}` }),
+    );
+    if (job.completedAt) meta.appendChild(element("span", { text: `Completed ${formatDate(job.completedAt)}` }));
+    if (job.startedAt) meta.appendChild(element("span", { text: `Elapsed ${formatElapsed(job.startedAt, job.completedAt || Date.now())}` }));
+    if (job.id === appState.transcriber?.runtime?.activeJobId && Number(appState.transcriber.runtime.etaSeconds) > 0) {
+        meta.appendChild(element("span", { text: formatEta(appState.transcriber.runtime.etaSeconds) }));
     }
-});
+    main.appendChild(meta);
+    main.appendChild(element("small", { className: "row-path", text: `Transcript: ${job.transcriptPath}` }));
+    if (job.status === "running" || Number(job.progress) > 0) {
+        const progressWrap = element("div", { className: "queue-progress" });
+        progressWrap.append(element("span", { className: "row-meta", text: `${titleCase(job.stage || job.status)} · ${Number(job.progress) || 0}%` }));
+        const progress = element("progress", { attributes: { max: "100", value: String(Number(job.progress) || 0) } });
+        progressWrap.appendChild(progress);
+        main.appendChild(progressWrap);
+    }
+    if (job.error) main.appendChild(element("div", { className: "row-error", text: job.error }));
+    const actions = element("div", { className: "row-actions" });
+    if (job.status === "queued") {
+        const up = iconButton("arrow-up", "Move job up");
+        up.disabled = index === 0 || jobs[index - 1]?.status !== "queued";
+        up.addEventListener("click", () => queueControl("move-up", job.id, up));
+        const down = iconButton("arrow-down", "Move job down");
+        down.disabled = index === jobs.length - 1 || jobs[index + 1]?.status !== "queued";
+        down.addEventListener("click", () => queueControl("move-down", job.id, down));
+        actions.append(up, down);
+    }
+    if (["failed", "cancelled", "skipped"].includes(job.status)) {
+        const retry = iconButton("rotate-cw", "Retry job");
+        retry.addEventListener("click", () => queueControl("retry", job.id, retry));
+        actions.appendChild(retry);
+    }
+    if (job.status === "succeeded") {
+        const preview = iconButton("eye", "Preview transcript");
+        preview.addEventListener("click", () => openTranscriptPreview(job.transcriptPath, preview));
+        const open = iconButton("file-text", "Open transcript");
+        open.addEventListener("click", () => withPending(open, () => run(`sh ./action.sh transcriber open-transcript ${shellQuote(job.transcriptPath)}`), "Opening"));
+        actions.append(preview, open);
+    }
+    if (job.status !== "running") {
+        const remove = iconButton("trash-2", "Remove job", "icon-button danger");
+        remove.addEventListener("click", () => queueControl("remove", job.id, remove));
+        actions.appendChild(remove);
+    }
+    row.append(element("span", { className: "row-select" }, badge(String(index + 1), "neutral")), main, actions);
+    return row;
+}
 
-document.querySelector("#remove-transcriber-deps-button").addEventListener("click", async () => {
-    const choice = await requestChoice({
-        title: "Remove Components",
-        message: "Remove module-local whisper.cpp binaries, models, and temporary transcriber work files. Existing transcripts are kept.",
-        actions: [
-            { label: "Remove", value: "remove", className: "danger" },
-            { label: "Cancel", value: "cancel", className: "ghost" },
-        ],
-    });
-    if (choice.value !== "remove") {
+function renderTranscriberRecordings() {
+    const page = appState.recordings || { items: [], total: 0, offset: 0, limit: 20, hasMore: false };
+    const list = $("#transcriber-recording-list");
+    list.replaceChildren();
+    if (!page.items?.length) showListState(list, "No recordings match this search.");
+    else for (const recording of page.items) list.appendChild(makeRecordingRow(recording, { compact: true }));
+    const controls = element("div", { className: "pagination" });
+    const previous = element("button", { className: "text-button secondary", text: "Previous", type: "button" });
+    previous.disabled = page.offset <= 0;
+    previous.addEventListener("click", () => changeTranscriberPage(-1));
+    const next = element("button", { className: "text-button secondary", text: "Next", type: "button" });
+    next.disabled = !page.hasMore;
+    next.addEventListener("click", () => changeTranscriberPage(1));
+    controls.append(previous, element("span", { text: `${page.offset + 1}-${page.offset + (page.items?.length || 0)} of ${page.total}` }), next);
+    list.appendChild(controls);
+    updateSelectionUi();
+}
+
+function componentStatus(key) {
+    return appState.components[`component.${key}.status`] || "missing";
+}
+
+function renderComponents() {
+    const list = $("#component-list");
+    list.replaceChildren();
+    const mono = currentMode() === "mono";
+    $("#component-compatibility-note").textContent = mono
+        ? "Mono fallback uses the whisper.cpp CLI and TinyDiarize model."
+        : "Stereo uses the whisper.cpp CLI and Whisper model. TinyDiarize is optional unless mono fallback is selected.";
+    const labels = { whisper_cli: "whisper.cpp CLI", base_model: "Whisper model", tinydiarize_model: "TinyDiarize model" };
+    for (const key of COMPONENT_KEYS) {
+        const status = componentStatus(key);
+        const prefix = `component.${key}`;
+        const row = element("article", { className: "component-row" });
+        const identity = element("div");
+        identity.append(element("span", { text: labels[key] }), element("strong", { text: titleCase(status) }));
+        const required = key === "whisper_cli" || (mono ? key === "tinydiarize_model" : key === "base_model");
+        identity.appendChild(element("small", { text: required ? "Required for current mode" : "Optional for current mode" }));
+        const detail = element("div", { className: "component-progress" });
+        const downloaded = Number(appState.components[`${prefix}.bytes_downloaded`] || 0);
+        const total = Number(appState.components[`${prefix}.bytes_total`] || 0);
+        const speed = Number(appState.components[`${prefix}.bytes_per_second`] || 0);
+        const progress = status === "ready" ? 100 : Math.max(0, Number(appState.components[`${prefix}.progress`]) || 0);
+        if (["downloading", "installing", "failed"].includes(status)) {
+            detail.appendChild(element("progress", { attributes: { max: "100", value: String(progress) } }));
+            const speedText = speed > 0 ? ` · ${formatBytes(speed)}/s` : "";
+            detail.appendChild(element("small", { text: `${formatBytes(downloaded)} / ${formatBytes(total)} · ${progress}%${speedText}` }));
+            const source = appState.components[`${prefix}.url`] || appState.components[`${prefix}.source_detail`] || "";
+            if (source) detail.appendChild(element("small", { className: "component-path", text: source }));
+        } else {
+            const path = appState.components[`${prefix}.path`] || "Not installed";
+            detail.appendChild(element("small", { className: "component-path", text: status === "ready" ? basename(path) : "Not installed" }));
+        }
+        const error = appState.components[`${prefix}.error`];
+        if (error) detail.appendChild(element("small", { className: "row-error", text: error }));
+        const actions = element("div", { className: "component-actions" });
+        if (status === "failed") {
+            const repair = iconButton("wrench", `Repair ${labels[key]}`);
+            repair.addEventListener("click", () => prepareComponents(repair));
+            actions.appendChild(repair);
+        }
+        if (status === "ready") {
+            const remove = iconButton("trash-2", `Remove ${labels[key]}`, "icon-button danger");
+            remove.addEventListener("click", () => removeComponent(key, labels[key], remove));
+            actions.appendChild(remove);
+        }
+        row.append(identity, detail, actions);
+        list.appendChild(row);
+    }
+}
+
+function renderDiagnostics(snapshot) {
+    const health = $("#health-grid");
+    health.replaceChildren();
+    const status = appState.status;
+    const transcriber = appState.transcriber || {};
+    const mode = currentMode();
+    const healthItems = [
+        ["Recorder daemon", status["daemon.running"] === "1" ? "Running" : "Stopped", status["daemon.running"] === "1" ? "success" : "danger"],
+        ["Output folder", status["output.dir.writable"] === "1" ? "Writable" : "Needs attention", status["output.dir.writable"] === "1" ? "success" : "danger"],
+        ["Transcript folder", status["transcriber.output_dir.writable"] === "1" ? "Writable" : "Needs attention", status["transcriber.output_dir.writable"] === "1" ? "success" : "danger"],
+        ["Free storage", formatBytes(status["output.dir.free_bytes"]), "neutral"],
+        ["Transcriber", mode === "mono" ? (transcriber.dependencies?.readyForMonoDiarization ? "Ready" : "Needs components") : (transcriber.dependencies?.readyForStereo ? "Ready" : "Needs components"), mode === "mono" ? (transcriber.dependencies?.readyForMonoDiarization ? "success" : "warning") : (transcriber.dependencies?.readyForStereo ? "success" : "warning")],
+    ];
+    for (const [label, value, tone] of healthItems) {
+        const item = element("div", { className: "health-item" });
+        item.append(element("span", { text: label }), element("strong", { text: value }), badge(titleCase(tone), tone));
+        health.appendChild(item);
+    }
+    $("#debug-enabled").checked = status["debug.enabled"] === "1";
+    $("#raw-status-output").textContent = formatRaw(status);
+    $("#raw-transcriber-output").textContent = appState.transcriber ? JSON.stringify(appState.transcriber, null, 2) : "Transcriber status unavailable.";
+    $("#raw-components-output").textContent = formatRaw(appState.components);
+    if (snapshot?.meta?.["snapshot.generated_at"]) $("#diagnostic-output").textContent = `Health snapshot captured ${formatDate(snapshot.meta["snapshot.generated_at"])}.`;
+}
+
+function updateSaveBar() {
+    $("#save-bar").hidden = appState.dirtySections.size === 0;
+}
+
+function markSettingsDirty(section) {
+    markDirty(section);
+    updateSaveBar();
+    if (section === "transcriber") updateModelCompatibility();
+}
+
+async function saveChanges(button) {
+    const commands = [];
+    if (appState.dirtySections.has("recorder")) {
+        const enabled = $("#recording-enabled").checked ? "1" : "0";
+        const log = $("#recording-log-enabled").checked ? "1" : "0";
+        const mode = $("input[name='recording-mode']:checked")?.value === "mono" ? "0" : "1";
+        const format = $("#recording-format").value || "wav";
+        const output = $("#output-dir").value.trim() || DEFAULT_OUTPUT_DIR;
+        const duration = Math.max(0, Number.parseInt($("#min-duration").value || "0", 10) || 0);
+        commands.push(
+            `sh ./action.sh config set recording.enabled ${enabled}`,
+            `sh ./action.sh config set recording.log_enabled ${log}`,
+            `sh ./action.sh config set recording.stereo ${mode}`,
+            `sh ./action.sh config set recording.format ${shellQuote(format)}`,
+            `sh ./action.sh config set output.dir ${shellQuote(output)}`,
+            `sh ./action.sh config set recording.min_duration ${duration}`,
+        );
+    }
+    if (appState.dirtySections.has("transcriber")) {
+        const wasEnabled = appState.status["transcriber.enabled"] === "1";
+        const enabled = $("#transcriber-enabled").checked;
+        let removeComponents = false;
+        if (!wasEnabled && enabled) {
+            const choice = await requestChoice({ title: "Enable transcriber", message: "Enable local transcription? Components must be prepared before jobs can start.", actions: [{ label: "Enable", value: "enable" }, { label: "Cancel", value: "cancel", className: "text-button secondary" }] });
+            if (choice.value !== "enable") return;
+        }
+        if (wasEnabled && !enabled) {
+            const choice = await requestChoice({ title: "Disable transcriber", message: "Queued jobs will remain saved. Existing transcripts are kept.", checkboxLabel: "Also remove downloaded transcriber components", actions: [{ label: "Disable", value: "disable", className: "text-button danger" }, { label: "Cancel", value: "cancel", className: "text-button secondary" }] });
+            if (choice.value !== "disable") return;
+            removeComponents = choice.checked;
+            commands.push("sh ./action.sh transcriber stop");
+        }
+        const transcriptOutput = $("#transcriber-output-dir").value.trim() || `${$("#output-dir").value.trim() || DEFAULT_OUTPUT_DIR}/transcripts`;
+        const selfName = $("#transcriber-speaker-self-name").value.trim() || "Speaker A";
+        const remoteName = $("#transcriber-speaker-remote-name").value.trim() || "Speaker B";
+        const localPath = $("#transcriber-whisper-local-enabled").checked ? $("#transcriber-whisper-local-path").value.trim() : "";
+        const modelUrl = $("#transcriber-model-url-enabled").checked ? $("#transcriber-model-url").value.trim() : $("#transcriber-model-preset").value;
+        const tdrzUrl = $("#transcriber-tdrz-url-enabled").checked ? $("#transcriber-tdrz-url").value.trim() : $("#transcriber-tdrz-preset").value;
+        if ($("#transcriber-whisper-local-enabled").checked && !localPath) throw new Error("Enter the local whisper.cpp package path or turn off the override.");
+        if (!modelUrl) throw new Error("Choose a Whisper model or provide a custom model URL.");
+        if (!tdrzUrl) throw new Error("Choose a TinyDiarize model or provide a custom model URL.");
+        commands.push(
+            `sh ./action.sh config set transcriber.enabled ${enabled ? "1" : "0"}`,
+            `sh ./action.sh config set transcriber.output_dir ${shellQuote(transcriptOutput)}`,
+            `sh ./action.sh config set transcriber.language ${shellQuote($("#transcriber-language").value || "en")}`,
+            `sh ./action.sh config set transcriber.speaker_self_name ${shellQuote(selfName)}`,
+            `sh ./action.sh config set transcriber.speaker_remote_name ${shellQuote(remoteName)}`,
+            `sh ./action.sh config set transcriber.output_format ${shellQuote($("#transcriber-output-format").value || "txt")}`,
+            `sh ./action.sh config set transcriber.whisper_manifest_url ${shellQuote(appState.status["transcriber.whisper_manifest_url"] || DEFAULT_MANIFEST_URL)}`,
+            "sh ./action.sh config set transcriber.whisper_url ''",
+            `sh ./action.sh config set transcriber.whisper_local_path ${shellQuote(localPath)}`,
+            `sh ./action.sh config set transcriber.model_url ${shellQuote(modelUrl)}`,
+            `sh ./action.sh config set transcriber.tinydiarize_model_url ${shellQuote(tdrzUrl)}`,
+            "sh ./action.sh transcriber components-reset",
+        );
+        if (removeComponents) commands.push("sh ./action.sh transcriber remove-deps");
+    }
+    if (appState.dirtySections.has("recorder")) commands.push("sh ./action.sh restart");
+    if (!commands.length) return;
+    await withPending(button, async () => {
+        await run(commands.join(" && "));
+        clearDirty();
+        updateSaveBar();
+        showToast("Settings saved");
+        await refreshActiveView({ forceForm: true });
+    }, "Saving");
+}
+
+async function resetRecorder(button) {
+    const choice = await requestChoice({ title: "Reset recorder settings", message: "Restore recorder defaults? Existing recordings and transcripts will not be changed.", actions: [{ label: "Reset", value: "reset", className: "text-button danger" }, { label: "Cancel", value: "cancel", className: "text-button secondary" }] });
+    if (choice.value !== "reset") return;
+    await withPending(button, async () => {
+        await run([
+            "sh ./action.sh config set recording.enabled 0", "sh ./action.sh config set recording.log_enabled 1", "sh ./action.sh config set recording.stereo 1",
+            "sh ./action.sh config set recording.format wav", `sh ./action.sh config set output.dir ${shellQuote(DEFAULT_OUTPUT_DIR)}`, "sh ./action.sh config set recording.min_duration 0", "sh ./action.sh restart",
+        ].join(" && "));
+        appState.dirtySections.delete("recorder");
+        updateSaveBar();
+        await refreshActiveView({ forceForm: true });
+        showToast("Recorder defaults restored");
+    }, "Resetting");
+}
+
+async function queueSelected(button) {
+    const paths = [...appState.selectedRecordings];
+    if (!paths.length) return showToast("Select at least one recording");
+    if (appState.status["transcriber.enabled"] !== "1") {
+        showActionError(new Error("Enable the transcriber before adding jobs."));
         return;
     }
-
-    setBusy(true);
-    try {
-        await run("sh ./action.sh transcriber remove-deps");
-        toast("Transcriber components removed");
-        await refreshTranscriberStatus();
-        await refreshTranscriberComponentsStatus();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
+    const visible = new Map((appState.recordings.items || []).map((item) => [item.path, item]));
+    let policy = "skip";
+    if (paths.some((path) => visible.get(path)?.selectedTranscriptExists)) {
+        const choice = await requestChoice({ title: "Existing transcripts", message: "Some selected recordings already have a transcript in the selected format.", actions: [{ label: "Skip existing", value: "skip" }, { label: "Overwrite", value: "overwrite", className: "text-button secondary" }, { label: "Cancel", value: "cancel", className: "text-button secondary" }] });
+        if (choice.value === "cancel") return;
+        policy = choice.value;
     }
-});
+    await withPending(button, async () => {
+        await run(`sh ./action.sh transcriber enqueue ${policy} ${paths.map(shellQuote).join(" ")}`);
+        for (const path of paths) appState.selectedRecordings.delete(path);
+        rememberSelection();
+        showToast("Recordings added to the queue");
+        await refreshActiveView();
+    }, "Queueing");
+}
 
-document.querySelector("#refresh-recordings-for-transcriber-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await refreshTranscriberRecordings();
-        await refreshTranscriberStatus();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
+async function queueControl(command, id, button) {
+    await withPending(button, async () => {
+        await run(`sh ./action.sh transcriber ${command}${id ? ` ${shellQuote(id)}` : ""}`);
+        await refreshActiveView({ silent: true });
+    }, "Updating");
+}
 
-document.querySelector("#select-all-recordings-button").addEventListener("click", () => {
-    for (const checkbox of selectedRecordingCheckboxes()) {
-        checkbox.checked = true;
-    }
-});
+async function openTranscriptPreview(path, button) {
+    appState.currentPreviewPath = path;
+    const dialog = $("#preview-dialog");
+    $("#preview-dialog-title").textContent = basename(path);
+    $("#preview-content").textContent = "Loading preview...";
+    if (!dialog.open) dialog.showModal();
+    await withPending(button, async () => {
+        const raw = await run(`sh ./action.sh transcriber preview ${shellQuote(path)} 20000`);
+        let preview;
+        try { preview = JSON.parse(raw); } catch (_) { preview = { available: false, error: raw || "Preview failed" }; }
+        $("#preview-content").textContent = preview.available ? `${preview.text}${preview.truncated ? "\n\n[Preview truncated]" : ""}` : preview.error || "Preview unavailable.";
+    }, "Loading");
+}
 
-document.querySelector("#clear-recording-selection-button").addEventListener("click", () => {
-    for (const checkbox of selectedRecordingCheckboxes()) {
-        checkbox.checked = false;
-    }
-});
+async function prepareComponents(button) {
+    await withPending(button, async () => {
+        const metadata = await runCapture("sh ./action.sh transcriber components-refresh-metadata");
+        if (!metadata.ok) showActionError(new Error(`Could not refresh download sizes: ${metadata.stderr}`));
+        await refreshActiveView({ silent: true });
+        const whisper = Number(appState.components["component.whisper_cli.bytes_total"] || 0);
+        const stereoBytes = whisper + Number(appState.components["component.base_model.bytes_total"] || 0);
+        const monoBytes = whisper + Number(appState.components["component.tinydiarize_model.bytes_total"] || 0);
+        const choice = await requestChoice({
+            title: "Prepare components",
+            message: `Stereo: whisper.cpp CLI and Whisper model (${formatBytes(stereoBytes)}).\nMono fallback: whisper.cpp CLI and TinyDiarize model (${formatBytes(monoBytes)}).`,
+            actions: [{ label: "Stereo", value: "stereo" }, { label: "Mono fallback", value: "mono", className: "text-button secondary" }, { label: "Cancel", value: "cancel", className: "text-button secondary" }],
+        });
+        if (choice.value === "cancel") return;
+        await run(`sh ./action.sh transcriber install-deps ${choice.value}`);
+        showToast("Component preparation started");
+        await refreshActiveView({ silent: true });
+    }, "Preparing");
+}
 
-document.querySelector("#queue-selected-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await queueSelectedRecordings();
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
+async function removeComponent(key, label, button) {
+    const choice = await requestChoice({ title: `Remove ${label}`, message: "Remove this downloaded component? Recordings, transcripts, and queue state are kept.", actions: [{ label: "Remove", value: "remove", className: "text-button danger" }, { label: "Cancel", value: "cancel", className: "text-button secondary" }] });
+    if (choice.value !== "remove") return;
+    await withPending(button, async () => {
+        await run(`sh ./action.sh transcriber remove-component ${key}`);
+        await refreshActiveView({ silent: true });
+        showToast(`${label} removed`);
+    }, "Removing");
+}
 
-document.querySelector("#pause-transcriber-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await transcriberControl("pause");
-        toast("Transcriber paused");
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#resume-transcriber-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await transcriberControl("resume");
-        toast("Transcriber resumed");
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#stop-transcriber-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await transcriberControl("stop");
-        toast("Transcriber stopping");
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#clear-transcriber-queue-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await transcriberControl("clear");
-        toast("Completed jobs cleared");
-    } catch (error) {
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-confirmClearButton?.addEventListener("click", () => {
-    closeConfirmOverlay(true);
-});
-
-cancelClearButton?.addEventListener("click", () => {
-    closeConfirmOverlay(false);
-});
-
-confirmOverlay?.addEventListener("click", (event) => {
-    if (event.target === confirmOverlay) {
-        closeConfirmOverlay(false);
-    }
-});
-
-choiceOverlay?.addEventListener("click", (event) => {
-    if (event.target === choiceOverlay) {
-        closeChoiceOverlay({ value: "cancel", checked: false });
-    }
-});
-
-document.querySelector("#save-debug-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await saveDebugConfig();
-    } catch (error) {
-        rememberDebugError("Saving debug configuration failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-debugEnabled?.addEventListener("change", () => {
-    updateDebugControls();
-});
-
-document.querySelector("#refresh-transcriber-debug-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        await refreshTranscriberDebug();
-    } catch (error) {
-        rememberDebugError("Manual transcriber debug refresh failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
-
-document.querySelector("#refresh-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        if (!isDebugEnabled()) {
-            toast("Enable debug tracking first");
-            return;
+async function selectAllResults(button, scope) {
+    const filters = appState.filters[scope];
+    await withPending(button, async () => {
+        let offset = 0;
+        let total = Infinity;
+        let pages = 0;
+        while (offset < total && pages < 40) {
+            const snapshot = await getSnapshot(scope === "library" ? "library" : "transcriber", { ...filters, offset, limit: 250 });
+            const page = snapshot.recordings || { total: 0, items: [] };
+            total = page.total;
+            for (const item of page.items || []) appState.selectedRecordings.add(item.path);
+            if (!page.hasMore || !page.items?.length) break;
+            offset += page.items.length;
+            pages += 1;
         }
-        await refreshAll();
-    } catch (error) {
-        rememberDebugError("Debug refresh failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
+        rememberSelection();
+        updateSelectionUi();
+        showToast(`${appState.selectedRecordings.size} recordings selected`);
+    }, "Selecting");
+}
 
-document.querySelector("#restart-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        if (!isDebugEnabled()) {
-            toast("Enable debug tracking first");
-            return;
-        }
-        await run("sh ./action.sh restart");
-        await refreshAll();
-        toast("Daemon restarted");
-    } catch (error) {
-        rememberDebugError("Daemon restart failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
+function changeLibraryPage(delta) {
+    const filter = appState.filters.library;
+    filter.offset = Math.max(0, filter.offset + delta * filter.limit);
+    refreshActiveView();
+}
 
-document.querySelector("#probe-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        if (!isDebugEnabled()) {
-            toast("Enable debug tracking first");
-            return;
-        }
-        await runDiagnostic("probe", "Probe returned no output.");
-        await refreshStatus();
-    } catch (error) {
-        rememberDebugError("Probe failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
-    }
-});
+function changeTranscriberPage(delta) {
+    const filter = appState.filters.transcriber;
+    filter.offset = Math.max(0, filter.offset + delta * filter.limit);
+    refreshActiveView();
+}
 
-document.querySelector("#logs-button").addEventListener("click", async () => {
-    setBusy(true);
-    try {
-        if (!isDebugEnabled()) {
-            toast("Enable debug tracking first");
-            return;
-        }
-        await runDiagnostic("logs", "No daemon logs yet.");
-    } catch (error) {
-        rememberDebugError("Reading daemon logs failed", error);
-        toast(String(error.message || error));
-    } finally {
-        setBusy(false);
+function updateFilter(scope) {
+    const filter = appState.filters[scope];
+    if (scope === "library") {
+        filter.search = $("#library-search").value.trim();
+        filter.transcript = $("#library-transcript-filter").value;
+        filter.channel = $("#library-channel-filter").value;
+        filter.sort = $("#library-sort").value;
+    } else {
+        filter.search = $("#transcriber-search").value.trim();
     }
-});
+    filter.offset = 0;
+    refreshActiveView();
+}
 
-syncTranscriberAdvancedFields();
-setActiveTab("recorder");
-setBusy(true);
-refreshAll()
-    .catch((error) => {
-        statusOutput.textContent = String(error.message || error);
-        diagnosticOutput.textContent = String(error.message || error);
-        recordingLogList.textContent = String(error.message || error);
-        toast(String(error.message || error));
-    })
-    .finally(() => {
-        setBusy(false);
-    });
+function shouldPoll() {
+    if (appState.activeView !== "transcriber" || document.hidden) return false;
+    const runtime = appState.transcriber?.runtime?.state || "";
+    const componentsRunning = appState.components["transcriber.components.running"] === "1";
+    return componentsRunning || ["running", "resuming", "stopping"].includes(runtime);
+}
+
+function updatePolling() {
+    if (!shouldPoll()) return stopPolling();
+    if (appState.pollTimer) return;
+    appState.pollTimer = window.setTimeout(pollOnce, 2500);
+}
+
+async function pollOnce() {
+    appState.pollTimer = null;
+    if (!shouldPoll() || appState.pollInFlight) return;
+    appState.pollInFlight = true;
+    try { await refreshActiveView({ silent: true }); } finally {
+        appState.pollInFlight = false;
+        updatePolling();
+    }
+}
+
+function stopPolling() {
+    if (appState.pollTimer) window.clearTimeout(appState.pollTimer);
+    appState.pollTimer = null;
+}
+
+function bindEvents() {
+    for (const button of $$(`[data-view-target]`)) button.addEventListener("click", () => setView(button.dataset.viewTarget));
+    const tabs = $$(".primary-nav [role='tab']");
+    for (const [index, tab] of tabs.entries()) {
+        tab.addEventListener("keydown", (event) => {
+            let nextIndex = null;
+            if (["ArrowDown", "ArrowRight"].includes(event.key)) nextIndex = (index + 1) % tabs.length;
+            if (["ArrowUp", "ArrowLeft"].includes(event.key)) nextIndex = (index - 1 + tabs.length) % tabs.length;
+            if (event.key === "Home") nextIndex = 0;
+            if (event.key === "End") nextIndex = tabs.length - 1;
+            if (nextIndex === null) return;
+            event.preventDefault();
+            tabs[nextIndex].focus();
+            setView(tabs[nextIndex].dataset.viewTarget);
+        });
+    }
+    $("#refresh-view-button").addEventListener("click", () => refreshActiveView());
+    $("#dismiss-action-error").addEventListener("click", dismissActionError);
+    $("#open-output-button").addEventListener("click", (event) => withPending(event.currentTarget, () => run("sh ./action.sh open-output-dir"), "Opening"));
+    $("#open-library-folder-button").addEventListener("click", (event) => withPending(event.currentTarget, () => run("sh ./action.sh open-output-dir"), "Opening"));
+    $("#open-last-recording-button").addEventListener("click", (event) => withPending(event.currentTarget, () => run(`sh ./action.sh open-recording ${shellQuote(appState.status["last.output"])}`), "Opening"));
+    $("#open-transcript-folder-button").addEventListener("click", (event) => withPending(event.currentTarget, () => run("sh ./action.sh open-transcript-output-dir"), "Opening"));
+    $("#reset-recorder-button").addEventListener("click", (event) => resetRecorder(event.currentTarget));
+    $("#save-changes-button").addEventListener("click", (event) => saveChanges(event.currentTarget).catch(showActionError));
+    $("#discard-changes-button").addEventListener("click", async () => { clearDirty(); updateSaveBar(); await refreshActiveView({ forceForm: true }); });
+
+    const recorderFields = ["#recording-enabled", "#recording-log-enabled", "#recording-format", "#output-dir", "#min-duration"];
+    for (const selector of recorderFields) $(selector).addEventListener("input", () => markSettingsDirty("recorder"));
+    for (const radio of $$("input[name='recording-mode']")) radio.addEventListener("change", () => markSettingsDirty("recorder"));
+    const transcriberFields = ["#transcriber-enabled", "#transcriber-output-dir", "#transcriber-language", "#transcriber-speaker-self-name", "#transcriber-speaker-remote-name", "#transcriber-output-format", "#transcriber-whisper-local-path", "#transcriber-model-preset", "#transcriber-model-url", "#transcriber-tdrz-preset", "#transcriber-tdrz-url"];
+    for (const selector of transcriberFields) $(selector).addEventListener("input", () => markSettingsDirty("transcriber"));
+    for (const [toggle, field] of [["#transcriber-whisper-local-enabled", "#transcriber-whisper-local-field"], ["#transcriber-model-url-enabled", "#transcriber-model-url-field"], ["#transcriber-tdrz-url-enabled", "#transcriber-tdrz-url-field"]]) {
+        $(toggle).addEventListener("change", () => { syncOverrideField(toggle, field); markSettingsDirty("transcriber"); });
+    }
+
+    $("#library-search").addEventListener("input", () => { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(() => updateFilter("library"), 350); });
+    for (const selector of ["#library-transcript-filter", "#library-channel-filter", "#library-sort"]) $(selector).addEventListener("change", () => updateFilter("library"));
+    $("#transcriber-search").addEventListener("input", () => { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(() => updateFilter("transcriber"), 350); });
+    $("#library-prev-button").addEventListener("click", () => changeLibraryPage(-1));
+    $("#library-next-button").addEventListener("click", () => changeLibraryPage(1));
+    $("#library-select-page-button").addEventListener("click", () => { for (const item of appState.recordings.items || []) appState.selectedRecordings.add(item.path); rememberSelection(); updateSelectionUi(); });
+    $("#transcriber-select-page-button").addEventListener("click", () => { for (const item of appState.recordings.items || []) appState.selectedRecordings.add(item.path); rememberSelection(); updateSelectionUi(); });
+    $("#library-clear-selection-button").addEventListener("click", () => { appState.selectedRecordings.clear(); rememberSelection(); updateSelectionUi(); });
+    $("#library-queue-button").addEventListener("click", (event) => queueSelected(event.currentTarget));
+    $("#queue-selected-button").addEventListener("click", (event) => queueSelected(event.currentTarget));
+
+    $("#start-queue-button").addEventListener("click", (event) => queueControl("start-worker", "", event.currentTarget));
+    $("#pause-queue-button").addEventListener("click", (event) => queueControl("pause", "", event.currentTarget));
+    $("#resume-queue-button").addEventListener("click", (event) => queueControl("resume", "", event.currentTarget));
+    $("#stop-queue-button").addEventListener("click", (event) => queueControl("stop", "", event.currentTarget));
+    $("#clear-completed-button").addEventListener("click", (event) => queueControl("clear", "", event.currentTarget));
+    $("#prepare-components-button").addEventListener("click", (event) => prepareComponents(event.currentTarget));
+
+    $("#save-debug-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => {
+        await run(`sh ./action.sh config set debug.enabled ${$("#debug-enabled").checked ? "1" : "0"}`);
+        showToast("Debug setting saved");
+        await refreshActiveView();
+    }, "Saving"));
+    $("#run-probe-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { $("#diagnostic-output").textContent = await run("sh ./action.sh probe") || "Probe returned no output."; }, "Probing"));
+    $("#restart-daemon-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { await run("sh ./action.sh restart"); await refreshActiveView(); showToast("Recorder daemon restarted"); }, "Restarting"));
+    $("#load-logs-button").addEventListener("click", (event) => withPending(event.currentTarget, async () => { $("#diagnostic-output").textContent = await run("sh ./action.sh logs") || "No logs available."; }, "Loading"));
+
+    $("#close-preview-button").addEventListener("click", () => $("#preview-dialog").close());
+    $("#close-preview-footer-button").addEventListener("click", () => $("#preview-dialog").close());
+    $("#open-preview-file-button").addEventListener("click", (event) => withPending(event.currentTarget, () => run(`sh ./action.sh transcriber open-transcript ${shellQuote(appState.currentPreviewPath)}`), "Opening"));
+    document.addEventListener("visibilitychange", () => document.hidden ? stopPolling() : updatePolling());
+}
+
+function addSelectAllActions() {
+    const librarySelectAll = element("button", { className: "text-button secondary", text: "Select all results", type: "button" });
+    librarySelectAll.addEventListener("click", () => selectAllResults(librarySelectAll, "library"));
+    $("#library-selection-bar > div").prepend(librarySelectAll);
+    const transcriberSelectAll = element("button", { className: "text-button secondary", text: "Select all results", type: "button" });
+    transcriberSelectAll.addEventListener("click", () => selectAllResults(transcriberSelectAll, "transcriber"));
+    $("#transcriber-select-page-button").insertAdjacentElement("afterend", transcriberSelectAll);
+}
+
+function initialize() {
+    const languageSelect = $("#transcriber-language");
+    for (const [value, label] of LANGUAGES) languageSelect.appendChild(element("option", { text: label, attributes: { value } }));
+    renderIcons();
+    bindEvents();
+    addSelectAllActions();
+    updateSelectionUi();
+    setView(appState.activeView, { refresh: false });
+    refreshActiveView({ forceForm: true });
+}
+
+initialize();
