@@ -179,13 +179,8 @@ This rebuild uses its own version line and does not inherit the original BCR
 release numbering.
 
 - `1.0.0` is the first standalone headless release
-- `1.1.2` is the current public release
-- `1.3.0-test.2` is the private draft test build for the WebUI and transcriber
-  overhaul
-
-Test builds retain module ID `bcr.headless` so they exercise the real update
-path. They are distributed only as unpublished draft-release assets and do not
-replace the public release metadata.
+- `1.1.2` is the previous public release
+- `1.3.0` is the current public release
 
 ## Building And Testing
 

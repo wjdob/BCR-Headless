@@ -191,7 +191,7 @@ function renderGlobalStatus() {
     const pill = $("#global-status");
     pill.replaceChildren(element("span", { className: "status-dot" }), document.createTextNode(label));
     pill.className = `status-pill status-${!enabled ? "neutral" : running ? "success" : "danger"}`;
-    $("#module-version").textContent = status["module.version"] || (IS_MOCK ? "1.3.0-test.2 mock" : "1.3.0-test.2");
+    $("#module-version").textContent = status["module.version"] || (IS_MOCK ? "1.3.0 mock" : "1.3.0");
 }
 
 function renderRecorder() {

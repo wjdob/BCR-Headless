@@ -28,7 +28,7 @@ const recordings = Array.from({ length: 96 }, (_, index) => {
 
 const status = {
     "module.id": "bcr.headless",
-    "module.version": "1.3.0-test.2",
+    "module.version": "1.3.0",
     "recording.enabled": "1",
     "recording.log_enabled": "1",
     "recording.stereo": "1",

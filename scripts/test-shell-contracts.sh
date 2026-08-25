@@ -30,7 +30,7 @@ prepare_module() {
     touch "${module_dir}/tools/bcr-headless.apk"
     cat > "${module_dir}/module.prop" <<'EOF'
 id=bcr.headless
-version=v1.3.0-test.2
+version=v1.3.0
 EOF
 }
 
@@ -143,7 +143,7 @@ mkdir -p "${current_module}/.config" "${current_module}/.state" \
 cp "${root_dir}/app/magisk/customize.sh" "${staged_module}/customize.sh"
 cat > "${staged_module}/module.prop" <<'EOF'
 id=bcr.headless
-version=v1.3.0-test.2
+version=v1.3.0
 EOF
 printf '%s' "${user_media}" > "${current_module}/.config/output.dir"
 printf 'native-cli' > "${current_module}/tools/transcriber/whisper-cli"

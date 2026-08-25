@@ -1,6 +1,4 @@
-### Unreleased
-
-#### 1.3.0-test.2
+### Version 1.3.0
 
 - Removed eager audio-channel inspection from normal recording listings, making
   Library and Transcribe navigation scale with larger recording sets
@@ -41,8 +39,6 @@
   and controller modules, with dynamic content rendered as text nodes
 - Added Kotlin transcript/queue/library tests, WebUI contract tests, shell and
   JavaScript syntax checks, and release ZIP plus checksum handling
-- Added a draft-test release path that omits public workflow artifacts and never
-  updates production release metadata
 - Preserved module configuration, recorder history, logs, queue state,
   downloaded components, recordings, and transcripts across in-place updates
 

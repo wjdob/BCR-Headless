@@ -1,7 +1,8 @@
-BCR Headless 1.1.2
+BCR Headless 1.3.0
 
-- Removed experimental auto-queue, charging-gated start, and charging delay automation for transcription jobs
-- Added a direct "Open Transcript Folder" action in Transcriber settings
-- Improved list density and responsiveness for Recordings and Transcriber views
+- Rebuilt the WebUI around compact Recorder, Library, Transcribe, and Diagnostics views
+- Improved large-library responsiveness, search, selection, and inline transcription queue actions
+- Simplified component setup and on-demand diagnostics
+- Preserved configuration, recordings, transcripts, queue state, logs, and components across updates
 
-Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.1.2/CHANGELOG.md
+Full project changelog: https://github.com/wjdob/BCR-Headless/blob/v1.3.0/CHANGELOG.md
