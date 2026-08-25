@@ -29,20 +29,18 @@ object HeadlessTranscriberComponents {
     private const val PREPARE_PROFILE_MONO = "mono"
 
     fun runPrepare(args: Array<String>) {
-        require(args.size >= 11) {
-            "Usage: transcriber prepare-components <module_dir> <whisper_path> <whisper_manifest_url> <whisper_url> <whisper_local_path> <model_path> <model_url> <tinydiarize_model_path> <tinydiarize_model_url> <prepare_profile>"
+        require(args.size >= 9) {
+            "Usage: transcriber prepare-components <module_dir> <whisper_path> <whisper_manifest_url> <model_path> <model_url> <tinydiarize_model_path> <tinydiarize_model_url> <prepare_profile>"
         }
 
         val moduleDir = File(args[1])
         val whisperPath = File(args[2])
         val whisperManifestUrl = args[3].trim()
-        val whisperUrl = args[4].trim()
-        val whisperLocalPath = args[5].trim().takeIf { it.isNotEmpty() }?.let(::File)
-        val modelPath = File(args[6])
-        val modelUrl = args[7].trim()
-        val tinydiarizeModelPath = File(args[8])
-        val tinydiarizeModelUrl = args[9].trim()
-        val prepareProfile = if (args[10].trim().lowercase(Locale.ROOT) == PREPARE_PROFILE_MONO) {
+        val modelPath = File(args[4])
+        val modelUrl = args[5].trim()
+        val tinydiarizeModelPath = File(args[6])
+        val tinydiarizeModelUrl = args[7].trim()
+        val prepareProfile = if (args[8].trim().lowercase(Locale.ROOT) == PREPARE_PROFILE_MONO) {
             PREPARE_PROFILE_MONO
         } else {
             PREPARE_PROFILE_STEREO
@@ -51,8 +49,6 @@ object HeadlessTranscriberComponents {
             state = ComponentInstallerState(moduleDir),
             whisperPath = whisperPath,
             whisperManifestUrl = whisperManifestUrl,
-            whisperUrl = whisperUrl,
-            whisperLocalPath = whisperLocalPath,
             modelPath = modelPath,
             modelUrl = modelUrl,
             tinydiarizeModelPath = tinydiarizeModelPath,
@@ -64,25 +60,21 @@ object HeadlessTranscriberComponents {
     }
 
     fun runRefreshMetadata(args: Array<String>) {
-        require(args.size >= 10) {
-            "Usage: transcriber refresh-component-metadata <module_dir> <whisper_path> <whisper_manifest_url> <whisper_url> <whisper_local_path> <model_path> <model_url> <tinydiarize_model_path> <tinydiarize_model_url>"
+        require(args.size >= 8) {
+            "Usage: transcriber refresh-component-metadata <module_dir> <whisper_path> <whisper_manifest_url> <model_path> <model_url> <tinydiarize_model_path> <tinydiarize_model_url>"
         }
 
         val moduleDir = File(args[1])
         val whisperPath = File(args[2])
         val whisperManifestUrl = args[3].trim()
-        val whisperUrl = args[4].trim()
-        val whisperLocalPath = args[5].trim().takeIf { it.isNotEmpty() }?.let(::File)
-        val modelPath = File(args[6])
-        val modelUrl = args[7].trim()
-        val tinydiarizeModelPath = File(args[8])
-        val tinydiarizeModelUrl = args[9].trim()
+        val modelPath = File(args[4])
+        val modelUrl = args[5].trim()
+        val tinydiarizeModelPath = File(args[6])
+        val tinydiarizeModelUrl = args[7].trim()
         val installer = ComponentInstaller(
             state = ComponentInstallerState(moduleDir),
             whisperPath = whisperPath,
             whisperManifestUrl = whisperManifestUrl,
-            whisperUrl = whisperUrl,
-            whisperLocalPath = whisperLocalPath,
             modelPath = modelPath,
             modelUrl = modelUrl,
             tinydiarizeModelPath = tinydiarizeModelPath,
@@ -96,8 +88,6 @@ object HeadlessTranscriberComponents {
         private val state: ComponentInstallerState,
         private val whisperPath: File,
         private val whisperManifestUrl: String,
-        private val whisperUrl: String,
-        private val whisperLocalPath: File?,
         private val modelPath: File,
         private val modelUrl: String,
         private val tinydiarizeModelPath: File,
@@ -282,7 +272,6 @@ object HeadlessTranscriberComponents {
         private fun refreshWhisperMetadata(): Long {
             status.set("component.whisper_cli.abi", detectAndroidAbi())
             status.set("component.whisper_cli.manifest_url", whisperManifestUrl)
-            status.set("component.whisper_cli.local_path", whisperLocalPath?.absolutePath.orEmpty())
             status.set("component.whisper_cli.path", whisperPath.absolutePath)
 
             if (whisperPath.isFile && verifyWhisperExecutable(whisperPath, throwOnFailure = false)) {
@@ -292,7 +281,6 @@ object HeadlessTranscriberComponents {
 
             val source = resolveWhisperSource(status.value("component.whisper_cli.abi").ifBlank { detectAndroidAbi() })
             val bytesTotal = when {
-                source.localFile != null -> source.localFile.length()
                 !source.url.isNullOrBlank() -> try {
                     probeRemoteSize(source.url) ?: source.bytesTotal ?: 0L
                 } catch (_: Exception) {
@@ -311,17 +299,6 @@ object HeadlessTranscriberComponents {
             source.build?.let { status.set("component.whisper_cli.build", it) }
             source.ref?.let { status.set("component.whisper_cli.whisper_ref", it) }
             source.commit?.let { status.set("component.whisper_cli.whisper_commit", it) }
-
-            if (source.kind == "local") {
-                if (source.localFile?.isFile == true) {
-                    status.set("component.whisper_cli.status", "selected")
-                    status.set("component.whisper_cli.error", "")
-                    return bytesTotal
-                }
-                status.set("component.whisper_cli.status", "failed")
-                status.set("component.whisper_cli.error", "Selected local whisper package is missing")
-                return 0L
-            }
 
             status.set("component.whisper_cli.status", "missing")
             status.set("component.whisper_cli.error", "")
@@ -367,7 +344,6 @@ object HeadlessTranscriberComponents {
             val abi = detectAndroidAbi()
             status.set("component.whisper_cli.abi", abi)
             status.set("component.whisper_cli.manifest_url", whisperManifestUrl)
-            status.set("component.whisper_cli.local_path", whisperLocalPath?.absolutePath.orEmpty())
             status.set("component.whisper_cli.path", whisperPath.absolutePath)
 
             val source = resolveWhisperSource(abi)
@@ -381,21 +357,7 @@ object HeadlessTranscriberComponents {
             source.commit?.let { status.set("component.whisper_cli.whisper_commit", it) }
 
             when (source.kind) {
-                "local" -> installLocalFile(
-                    componentKey = "whisper_cli",
-                    label = "whisper_cli",
-                    sourceFile = source.localFile ?: throw IOException("Local whisper package is missing"),
-                    destination = whisperPath,
-                    extractor = { input, output ->
-                        if (source.localFile.extension.equals("zip", ignoreCase = true) || isZipFile(source.localFile)) {
-                            extractWhisperCliZip(input, output)
-                        } else {
-                            copyFile(source.localFile, output)
-                        }
-                    },
-                )
-
-                "url", "manifest" -> installRemoteFile(
+                "manifest" -> installRemoteFile(
                     componentKey = "whisper_cli",
                     label = "whisper_cli",
                     sourceUrl = source.url ?: throw IOException("Resolved whisper download URL is empty"),
@@ -419,26 +381,6 @@ object HeadlessTranscriberComponents {
         }
 
         private fun resolveWhisperSource(abi: String): WhisperSource {
-            whisperLocalPath?.let { localFile ->
-                if (!localFile.isFile) {
-                    throw IOException("Selected local whisper package is missing: ${localFile.absolutePath}")
-                }
-                return WhisperSource(
-                    kind = "local",
-                    detail = localFile.absolutePath,
-                    localFile = localFile,
-                    bytesTotal = localFile.length(),
-                )
-            }
-
-            if (whisperUrl.isNotBlank()) {
-                return WhisperSource(
-                    kind = "url",
-                    detail = whisperUrl,
-                    url = whisperUrl,
-                )
-            }
-
             if (abi == "unknown") {
                 throw IOException("Unable to detect Android CPU ABI")
             }
@@ -465,61 +407,6 @@ object HeadlessTranscriberComponents {
                 ref = manifest["whisper_cpp_ref"]?.ifBlank { null },
                 commit = manifest["whisper_cpp_commit"]?.ifBlank { null },
             )
-        }
-
-        private fun installLocalFile(
-            componentKey: String,
-            label: String,
-            sourceFile: File,
-            destination: File,
-            extractor: ((File, File) -> Unit)?,
-        ) {
-            if (componentKey != "whisper_cli" && destination.isFile) {
-                markReady(componentKey, destination)
-                logger.log("$label already present at ${destination.absolutePath}")
-                return
-            }
-            if (componentKey == "whisper_cli" && destination.isFile && verifyWhisperExecutable(destination, throwOnFailure = false)) {
-                markReady(componentKey, destination)
-                logger.log("$label already present at ${destination.absolutePath}")
-                return
-            }
-
-            destination.parentFile?.mkdirs()
-            val tmp = File(destination.parentFile, "${destination.name}.download")
-            val prepared = File(destination.parentFile, "${destination.name}.prepared")
-            tmp.delete()
-            prepared.delete()
-
-            status.set("component.$componentKey.status", "installing")
-            status.set("component.$componentKey.progress", "0")
-            status.set("component.$componentKey.error", "")
-            status.set("component.$componentKey.bytes_total", sourceFile.length().toString())
-            logger.log("installing $label from local package ${sourceFile.absolutePath}")
-
-            copyWithProgress(
-                input = sourceFile.inputStream().buffered(),
-                output = tmp.outputStream().buffered(),
-                totalBytes = sourceFile.length().takeIf { it > 0 },
-                onProgress = { downloaded, total ->
-                    updateProgress(componentKey, downloaded, total)
-                },
-            )
-
-            if (extractor != null) {
-                extractor(tmp, prepared)
-                tmp.delete()
-                prepared.renameTo(destination)
-            } else {
-                tmp.renameTo(destination)
-            }
-
-            if (componentKey == "whisper_cli") {
-                destination.setExecutable(true, false)
-            }
-
-            markReady(componentKey, destination)
-            logger.log("$label ready at ${destination.absolutePath}")
         }
 
         private fun installRemoteFile(
@@ -760,36 +647,6 @@ object HeadlessTranscriberComponents {
             }
         }
 
-        private fun copyWithProgress(
-            input: java.io.InputStream,
-            output: java.io.OutputStream,
-            totalBytes: Long?,
-            onProgress: (downloaded: Long, total: Long?) -> Unit,
-        ) {
-            input.use { source ->
-                output.use { sink ->
-                    val buffer = ByteArray(COPY_BUFFER_SIZE)
-                    var downloaded = 0L
-                    var lastReported = 0L
-
-                    while (true) {
-                        val read = source.read(buffer)
-                        if (read < 0) {
-                            break
-                        }
-                        sink.write(buffer, 0, read)
-                        downloaded += read.toLong()
-                        if (downloaded == totalBytes || downloaded - lastReported >= PROGRESS_UPDATE_BYTES) {
-                            onProgress(downloaded, totalBytes)
-                            lastReported = downloaded
-                        }
-                    }
-
-                    onProgress(downloaded, totalBytes ?: downloaded)
-                }
-            }
-        }
-
         private fun extractWhisperCliZip(zipFile: File, destination: File) {
             ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zip ->
                 while (true) {
@@ -808,19 +665,6 @@ object HeadlessTranscriberComponents {
             }
 
             throw IOException("Downloaded package did not contain whisper-cli")
-        }
-
-        private fun isZipFile(file: File): Boolean {
-            if (!file.isFile || file.length() < 4L) {
-                return false
-            }
-            file.inputStream().use { input ->
-                val signature = ByteArray(4)
-                if (input.read(signature) != signature.size) {
-                    return false
-                }
-                return signature[0] == 'P'.code.toByte() && signature[1] == 'K'.code.toByte()
-            }
         }
 
         private fun sha256Hex(file: File): String {
@@ -970,7 +814,6 @@ object HeadlessTranscriberComponents {
         val kind: String,
         val detail: String,
         val url: String? = null,
-        val localFile: File? = null,
         val sha256: String? = null,
         val bytesTotal: Long? = null,
         val build: String? = null,

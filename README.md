@@ -5,16 +5,15 @@
 [![latest release badge](https://img.shields.io/github/v/release/wjdob/BCR-Headless?sort=semver)](https://github.com/wjdob/BCR-Headless/releases/latest)
 [![license badge](https://img.shields.io/github/license/wjdob/BCR-Headless)](./LICENSE)
 
-BCR Headless is a headless call recorder module for rooted Android devices. It
-keeps recording, state, and optional offline transcription inside the module
-directory and exposes configuration through a module WebUI instead of a visible
-companion app.
+BCR Headless is a call recorder module for rooted Android devices. Recording,
+configuration, diagnostics, and optional offline transcription are managed from
+the module WebUI; no visible companion app is installed.
 
 <p>
-  <img src="app/images/UI1.jpg" alt="WebUI screenshot top section" width="200" />
-  <img src="app/images/UI3.jpg" alt="WebUI screenshot lower section" width="200" />
-  <img src="app/images/UI4.jpg" alt="WebUI screenshot lower section" width="200" />
-  <img src="app/images/UI7.jpg" alt="WebUI screenshot lower section" width="200" />
+  <img src="app/images/webui-recorder.png" alt="Recorder view" width="210" />
+  <img src="app/images/webui-library.png" alt="Recording library" width="210" />
+  <img src="app/images/webui-transcribe.png" alt="Transcription queue" width="210" />
+  <img src="app/images/webui-diagnostics.png" alt="Diagnostics view" width="210" />
 </p>
 
 ## Credits
@@ -26,137 +25,130 @@ This project is based on the original BCR project by Andrew Gunnerson
 - Original author: Andrew Gunnerson
 - Original contributors: see the upstream repository history and contributors
   list
+- Interface icons: [Lucide](https://lucide.dev), distributed under its ISC/MIT
+  license terms
 
-## What Changed From The Original App
+## Headless Architecture
 
-This rebuild pivots away from the original system-app architecture:
+This rebuild replaces the original system-app interface with a module-owned
+runtime and WebUI:
 
-- no visible settings app is installed
-- the helper APK lives inside the module under `tools/bcr-headless.apk`
-- configuration is stored in module-local files and mirrored into KernelSU
-  module config when available
-- the module WebUI is the primary control surface
-- added optional offline transcriber using Whisper.cpp and Whisper/TinyDiarize models
+- the helper APK is installed under `tools/bcr-headless.apk`
+- configuration and runtime state are stored inside the module
+- KernelSU module configuration is updated when that interface is available
+- the WebUI is the primary control surface
+- Whisper.cpp transcription is optional and runs entirely on the device
 
-## Current Features
+## Features
 
 - headless boot-time recorder daemon
 - Magisk and KernelSU module packaging
-- recorder enable or disable from WebUI
-- output directory selection
-- default output directory: `/sdcard/Recordings/BCRHeadless`
-- minimum-duration filtering
-- recorder output format selection:
-  - `WAV/PCM`
-  - `OGG/Opus`
-  - `M4A/AAC`
-- stereo capture by default when `VOICE_CALL` stereo initialization succeeds
-- manual `Mono fallback` override in the WebUI
-- optional in-module recording history
-- offline transcription queue with `.txt` and `.docx` output
-- custom self-speaker label in transcripts
-- stereo component preparation or mono-fallback Whisper components preparation
-- automatic normalization of compressed recordings to PCM WAV before whisper
-  transcription so diarization stays on the same stable pipeline
-- manual queue management for transcription jobs
-- (QoL) update installs preserve config, recorder history, queue state, and downloaded
-  transcriber components
-- debug view for recorder runtime, transcriber state, component status, and logs
+- stereo `VOICE_CALL` capture when supported, with mono fallback
+- `WAV/PCM`, `OGG/Opus`, and `M4A/AAC` recording formats
+- configurable output directory and minimum recording duration
+- optional module recording history
+- compact, searchable, paginated recording library
+- persistent multi-selection and transcript availability filters
+- manual offline transcription queue with pause, resume, stop, retry, reorder,
+  and removal controls
+- timestamped `TXT`, `DOCX`, `SRT`, `VTT`, and `JSON` transcripts
+- configurable local and remote speaker names
+- stereo channel separation and best-effort mono TinyDiarize labeling
+- temporary PCM normalization for compressed recordings
+- component preparation matched to stereo or mono-fallback operation
+- on-demand diagnostics with debug tracking disabled by default
+- in-place update preservation for configuration, history, queue state, logs,
+  downloaded components, recordings, and transcripts
+- atomic transcript publication so interrupted work cannot replace a valid file
 
 ## Current Limitations
 
-- transcription remains experimental
-- speaker labeling is best-effort
+- transcription and speaker labeling remain experimental
 - mono speaker labeling requires a TinyDiarize-capable model
-- stereo diarization is optimized for the common two-side call case
-- multiple different people speaking on the same side/channel are not fully
-  separated yet
-- auto-record rules, contacts integration, and filename-template workflows from
-  the original BCR app are not part of this headless rebuild
+- stereo labeling is optimized for the common two-side call case
+- different people sharing one channel may not always be distinguished
+- auto-record rules, contacts integration, and filename templates from the
+  original BCR app are not part of this headless rebuild
 
-## Usage
+## Installation
 
-1. Build or download the release zip.
-2. Flash it as a Magisk or KernelSU module.
+1. Build or download the module ZIP.
+2. Install it through Magisk or KernelSU.
 3. Reboot.
-4. Open the module WebUI.
-5. Save your recorder settings.
-6. If you want transcripts, enable the transcriber and run `Prepare Components`.
+4. Open the module WebUI and review the Recorder settings.
+5. To use transcription, enable it and select `Prepare Components`.
 
-## WebUI Overview
+The default recording directory is `/sdcard/Recordings/BCRHeadless`. The
+default transcript directory is `/sdcard/Recordings/BCRHeadless/transcripts`.
+Existing configured paths and user media are preserved during module updates.
+
+## WebUI
 
 ### Recorder
 
-<img src="app/images/UI2.jpg" alt="WebUI screenshot lower section" width="200" />
+<img src="app/images/webui-recorder.png" alt="Recorder health and settings" width="720" />
 
-- enable or disable recording
-- choose stereo or mono fallback
-- choose the output format
-- set the output directory
-- set the minimum recording duration
+The Recorder view presents daemon health, active recording state, detected
+capture support, output health, free space, and the latest recording before its
+editable settings.
 
-### Recordings
+### Library
 
-<img src="app/images/UI3.jpg" alt="WebUI screenshot lower section" width="200" />
+<img src="app/images/webui-library.png" alt="Searchable recording library" width="720" />
 
-- review saved recording history
-- open saved recordings
-- clear the module recording history
+The Library provides fast server-side search, transcript filtering, sorting,
+paging, persistent selection, recording actions, inline queue actions, and
+transcript preview.
 
-### Transcriber
+### Transcribe
 
-<p>
-<img src="app/images/UI4.jpg" alt="WebUI screenshot lower section" width="200" />
-<img src="app/images/UI5.jpg" alt="WebUI screenshot lower section" width="200" />
-<img src="app/images/UI6.jpg" alt="WebUI screenshot lower section" width="200" />
-</p>
+<img src="app/images/webui-transcribe.png" alt="Transcriber activity and queue" width="720" />
 
-- enable or disable offline transcription
-- choose the transcript directory, source language, and transcript format
-- choose the Whisper model and optional overrides
-- prepare stereo or mono-fallback components
-- queue one, many, or all recordings
-- pause, resume, stop, remove, or clear jobs
+Transcription is deliberately manual. Adding recordings does not start the
+worker; select `Start Queue` when processing should begin. The active job and
+queue show stage, progress, elapsed time, ETA, timestamps, output target, and
+recoverable errors. Component details expand only while preparing or
+troubleshooting.
 
-### Debug
+### Diagnostics
 
-<p>
-<img src="app/images/UI7.jpg" alt="WebUI screenshot lower section" width="200" />
-<img src="app/images/UI8.jpg" alt="WebUI screenshot lower section" width="200" />
-<img src="app/images/UI9.jpg" alt="WebUI screenshot lower section" width="200" />
-</p>
+<img src="app/images/webui-diagnostics.png" alt="On-demand diagnostics" width="720" />
 
-- enable troubleshooting data only when needed
-- inspect recorder runtime and probe output
-- inspect transcriber status, component state, job state, and logs
+Diagnostics keeps troubleshooting controls and raw details out of the primary
+workflow. Debug tracking is off by default; probe and log output appears only
+when requested.
 
-## Transcriber Component Sets
+## Transcriber Components
 
-`Prepare Components` offers two paths:
+`Prepare Components` offers two sets:
 
-- `Stereo`: downloads the device-matched `whisper.cpp` CLI package plus the
-  selected Whisper model
-- `Mono fallback`: downloads the device-matched `whisper.cpp` CLI package plus
-  the selected TinyDiarize model
+- `Stereo`: the device-matched Whisper.cpp CLI and selected Whisper model
+- `Mono fallback`: the device-matched Whisper.cpp CLI and selected
+  TinyDiarize-capable model
 
-If you choose a compressed recording format such as `OGG/Opus` or `M4A/AAC`,
-the transcriber converts the recording to a temporary PCM WAV before sending it
-to whisper. This keeps transcription and diarization behavior consistent with
-the WAV path.
+The repository-owned `Transcriber tools` workflow builds Android CLI packages
+for supported ABIs. Its pinned Whisper.cpp source and build matrix are stored in
+`scripts/transcriber-tools.env`. Preparation reads the release manifest,
+selects the matching package, verifies available checksums, and installs only
+the chosen model set. Component sources are curated by the module.
 
 ## Shell Control
 
 ```bash
+su -c sh /data/adb/modules/bcr.headless/action.sh ui-snapshot recorder
 su -c sh /data/adb/modules/bcr.headless/action.sh status
+su -c sh /data/adb/modules/bcr.headless/action.sh output-health transcripts
 su -c sh /data/adb/modules/bcr.headless/action.sh config list
-su -c sh /data/adb/modules/bcr.headless/action.sh reset-config
 su -c sh /data/adb/modules/bcr.headless/action.sh restart
 su -c sh /data/adb/modules/bcr.headless/action.sh probe
 su -c sh /data/adb/modules/bcr.headless/action.sh logs
 su -c sh /data/adb/modules/bcr.headless/action.sh transcriber status
-su -c sh /data/adb/modules/bcr.headless/action.sh transcriber list
+su -c sh /data/adb/modules/bcr.headless/action.sh transcriber library 0 40 '' all newest all
 su -c sh /data/adb/modules/bcr.headless/action.sh transcriber enqueue skip /sdcard/Recordings/BCRHeadless/example.wav
+su -c sh /data/adb/modules/bcr.headless/action.sh transcriber start-worker
 ```
+
+Run the action script without arguments to display the complete command list.
 
 ## Main Configuration Keys
 
@@ -171,37 +163,15 @@ su -c sh /data/adb/modules/bcr.headless/action.sh transcriber enqueue skip /sdca
 - `transcriber.enabled`
 - `transcriber.output_dir`
 - `transcriber.language`
-- `transcriber.speaker_self_name`
 - `transcriber.output_format`
+- `transcriber.speaker_self_name`
+- `transcriber.speaker_remote_name`
 - `transcriber.whisper_path`
 - `transcriber.model_path`
 - `transcriber.tinydiarize_model_path`
 - `transcriber.whisper_manifest_url`
-- `transcriber.whisper_local_path`
-- `transcriber.whisper_url`
 - `transcriber.model_url`
 - `transcriber.tinydiarize_model_url`
-
-## Transcriber Native Tools
-
-This project uses repo-owned Android `whisper.cpp` builds for the transcriber.
-The pinned whisper.cpp source and build matrix live in:
-
-```text
-scripts/transcriber-tools.env
-```
-
-The `Transcriber tools` workflow publishes:
-
-- `transcriber-tools.env`
-- `whisper-cli-android-<abi>.zip`
-- `SHA256SUMS`
-
-`Prepare Components` downloads the manifest, chooses the best matching ABI,
-verifies the package when checksums are available, and installs the CLI plus the
-selected model set.
-
-As an option, you may feed your own Whisper.cpp binaries or Whisper/TinyDiarize model URLs in the Transcriber configuration.
 
 ## Versioning
 
@@ -209,22 +179,26 @@ This rebuild uses its own version line and does not inherit the original BCR
 release numbering.
 
 - `1.0.0` is the first standalone headless release
-- `1.1.2` is the current release
+- `1.1.2` is the previous public release
+- `1.3.0` is the current public release
 
-## Building
+## Building And Testing
 
-Build the release module zip with:
+Use JDK 21 and an Android SDK, then run:
 
 ```bash
-./gradlew zipRelease
+./gradlew --no-daemon build zipRelease
+node scripts/test-webui.mjs
 ```
+
+Open `app/magisk/webroot/index.html?mock=1` through a local HTTP server to use
+the browser mock adapter without a rooted device. The release ZIP is written to
+`app/build/distributions/release/`.
 
 Optional Gradle properties:
 
 - `-PprojectUrl=https://github.com/<you>/<repo>`
 - `-PreleaseMetadataBranch=main`
-
-The output zip is written to `app/build/distributions/release/`.
 
 ## License
 

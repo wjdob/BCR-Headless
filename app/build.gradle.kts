@@ -63,16 +63,21 @@ fun getVersionCode(major: Int, minor: Int, patch: Int, commitCount: Int, suffix:
     // The headless rebuild intentionally uses its own version line instead of
     // inheriting the fork history's release tags. That keeps published versions
     // honest about this project's architectural reset. The visible version name
-    // is plain semver, while the low digits of versionCode still advance with
-    // the current revision or temporary test suffix so update testing keeps
-    // working even from exact release tags.
+    // is plain semver. Reserve the final revision value for stable releases so
+    // a tested build can always update to its matching public release.
     val suffixCount = Regex("""(?:^|[-.])test\.(\d+)$""")
         .find(suffix.orEmpty())
         ?.groupValues
         ?.getOrNull(1)
         ?.toIntOrNull()
         ?: 0
-    return major * 1_000_000 + minor * 10_000 + patch * 100 + maxOf(commitCount, suffixCount).coerceAtMost(99)
+    val stableRevision = 99
+    val revision = if (suffix.isNullOrBlank()) {
+        stableRevision
+    } else {
+        maxOf(commitCount, suffixCount).coerceAtMost(stableRevision - 1)
+    }
+    return major * 1_000_000 + minor * 10_000 + patch * 100 + revision
 }
 
 fun getVersionName(major: Int, minor: Int, patch: Int, suffix: String?): String {
@@ -87,8 +92,8 @@ fun getVersionName(major: Int, minor: Int, patch: Int, suffix: String?): String 
 val git = Git.open(File(rootDir, ".git"))!!
 val gitVersionTriple = describeVersion(git)
 val projectVersionMajor = 1
-val projectVersionMinor = 1
-val projectVersionPatch = 2
+val projectVersionMinor = 3
+val projectVersionPatch = 0
 val projectVersionSuffix: String? = null
 val gitVersionCode = getVersionCode(
     projectVersionMajor,

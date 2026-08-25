@@ -1,9 +1,12 @@
-The changelog can be found at: [`CHANGELOG.md`](./CHANGELOG.md).
+# BCR Headless 1.3.0
 
----
+- Rebuilt the WebUI around compact Recorder, Library, Transcribe, and
+  Diagnostics views with responsive desktop and mobile navigation
+- Improved large-library responsiveness, search, selection, and inline queue
+  actions
+- Simplified transcription component setup and on-demand troubleshooting
+- Preserved configuration, recordings, transcripts, queue state, logs, and
+  downloaded components across updates
 
-See [`README.md`](./README.md) for information on how to install and use BCR Headless.
-
-Release packages are distributed as Magisk or KernelSU module zips. The
-headless helper APK lives inside the module and is not meant to be installed
-separately as a user app.
+See [`CHANGELOG.md`](./CHANGELOG.md) for the complete release notes and
+[`README.md`](./README.md) for installation and use.

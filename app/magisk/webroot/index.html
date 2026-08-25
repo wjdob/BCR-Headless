@@ -2,430 +2,270 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
     <title>BCR Headless</title>
     <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-    <main class="shell">
-        <section class="hero">
-            <p class="eyebrow">Headless Call Recorder</p>
-            <h1>BCR Headless</h1>
-            <p class="lede">
-                Headless call recording with optional offline transcription.
-            </p>
-            <div class="tabs" role="tablist" aria-label="Views">
-                <button id="recorder-tab" class="tab active" type="button">Recorder</button>
-                <button id="recordings-tab" class="tab ghost" type="button">Recordings</button>
-                <button id="transcriber-tab" class="tab ghost" type="button">Transcriber</button>
-                <button id="debug-tab" class="tab ghost" type="button">Debug</button>
+    <div class="app-shell">
+        <aside class="side-rail" aria-label="Primary navigation">
+            <div class="brand-lockup">
+                <span class="brand-icon" data-icon="phone-call" aria-hidden="true"></span>
+                <span>
+                    <strong>BCR Headless</strong>
+                    <small id="module-version">1.3.0</small>
+                </span>
             </div>
-        </section>
+            <nav class="primary-nav" role="tablist" aria-orientation="vertical">
+                <button class="nav-item is-active" type="button" role="tab" aria-selected="true" aria-controls="recorder-view" data-view-target="recorder">
+                    <span data-icon="mic" aria-hidden="true"></span><span>Recorder</span>
+                </button>
+                <button class="nav-item" type="button" role="tab" aria-selected="false" aria-controls="library-view" data-view-target="library">
+                    <span data-icon="library" aria-hidden="true"></span><span>Library</span>
+                </button>
+                <button class="nav-item" type="button" role="tab" aria-selected="false" aria-controls="transcribe-view" data-view-target="transcriber">
+                    <span data-icon="captions" aria-hidden="true"></span><span>Transcribe</span>
+                </button>
+                <button class="nav-item" type="button" role="tab" aria-selected="false" aria-controls="diagnostics-view" data-view-target="diagnostics">
+                    <span data-icon="activity" aria-hidden="true"></span><span>Diagnostics</span>
+                </button>
+            </nav>
+        </aside>
 
-        <section id="recorder-view" class="view stack">
-            <article class="card summary-card">
-                <div class="card-head compact">
-                    <h2>Status</h2>
-                    <div class="toolbar compact-toolbar">
-                        <button id="refresh-status-button" class="ghost" type="button">Refresh</button>
-                    </div>
+        <div class="app-frame">
+            <header class="topbar">
+                <div>
+                    <p id="view-kicker" class="kicker">Call recording</p>
+                    <h1 id="view-title">Recorder</h1>
                 </div>
-                <div class="summary-grid">
-                    <div class="summary-tile">
-                        <span class="label">Last Result</span>
-                        <strong id="last-result">No recordings yet</strong>
-                    </div>
-                    <div id="last-output-tile" class="summary-tile clickable" role="button" tabindex="0">
-                        <span class="label">Last Output</span>
-                        <strong id="last-output">/sdcard/Recordings/BCRHeadless</strong>
-                    </div>
+                <div class="topbar-actions">
+                    <span id="global-status" class="status-pill status-neutral"><span class="status-dot"></span>Loading</span>
+                    <button id="refresh-view-button" class="icon-button" type="button" title="Refresh current view" aria-label="Refresh current view">
+                        <span data-icon="refresh-cw" aria-hidden="true"></span>
+                    </button>
                 </div>
-            </article>
+            </header>
 
-            <article class="card">
-                <div class="card-head compact">
-                    <h2>Recorder</h2>
+            <main id="main-content" tabindex="-1">
+                <div id="action-error" class="inline-alert" role="alert" hidden>
+                    <span data-icon="alert-circle" aria-hidden="true"></span>
+                    <span id="action-error-message"></span>
+                    <button id="dismiss-action-error" class="icon-button" type="button" aria-label="Dismiss error"><span data-icon="x" aria-hidden="true"></span></button>
                 </div>
-
-                <label class="field toggle-row">
-                    <span>Recording enabled</span>
-                    <input id="recording-enabled" type="checkbox">
-                </label>
-                <small class="field-help">
-                    Turn on recording for this device.
-                </small>
-
-                <label class="field toggle-row">
-                    <span>Recording log</span>
-                    <input id="recording-log-enabled" type="checkbox">
-                </label>
-                <small class="field-help">
-                    Keep a history of saved recordings in this module.
-                </small>
-
-                <label class="field">
-                    <span>Recording mode</span>
-                    <select id="recording-mode">
-                        <option value="stereo">Stereo</option>
-                        <option value="mono">Mono fallback</option>
-                    </select>
-                    <small>
-                        Choose the preferred capture mode.
-                    </small>
-                </label>
-                <small id="recording-mode-note" class="field-help">
-                    VOICE_CALL capability check has not been loaded yet.
-                </small>
-
-                <label class="field">
-                    <span>Recording format</span>
-                    <select id="recording-format">
-                        <option value="wav">WAV/PCM</option>
-                        <option value="opus">OGG/Opus</option>
-                        <option value="aac">M4A/AAC</option>
-                    </select>
-                    <small>Compressed formats are converted automatically before transcription.</small>
-                </label>
-
-                <label class="field">
-                    <span>Output directory</span>
-                    <input id="output-dir" type="text" spellcheck="false">
-                    <small>Folder where recordings are saved.</small>
-                </label>
-
-                <label class="field">
-                    <span>Minimum duration</span>
-                    <div class="inline-input">
-                        <input id="min-duration" type="number" min="0" step="1">
-                        <span>seconds</span>
+                <section id="recorder-view" class="view" role="tabpanel" aria-label="Recorder">
+                    <div class="status-strip" aria-label="Recorder status">
+                        <div><span>Daemon</span><strong id="recorder-daemon-state">Checking</strong></div>
+                        <div><span>Recorder</span><strong id="recorder-runtime-state">Checking</strong></div>
+                        <div><span>Capture</span><strong id="recorder-capture-state">Stereo</strong></div>
+                        <div><span>Format</span><strong id="recorder-format-state">WAV</strong></div>
                     </div>
-                    <small>Discard recordings shorter than this length.</small>
-                </label>
 
-                <div class="actions">
-                    <button id="save-button" type="button">Save Changes</button>
-                    <button id="reset-button" class="ghost" type="button">Reset Defaults</button>
-                    <button id="open-output-button" class="ghost" type="button">Open Output Folder</button>
-                </div>
-            </article>
-        </section>
-
-        <section id="recordings-view" class="view stack" hidden>
-            <article class="card">
-                <div class="card-head">
-                    <h2>Recorded Calls</h2>
-                    <div class="toolbar">
-                        <button id="refresh-log-button" class="ghost" type="button">Refresh</button>
-                        <button id="clear-log-button" class="ghost danger" type="button">Clear Log</button>
-                    </div>
-                </div>
-                <div id="recording-log-list" class="entry-list">
-                    <p class="entry-empty">Loading recorded calls...</p>
-                </div>
-            </article>
-        </section>
-
-        <section id="transcriber-view" class="view stack" hidden>
-            <article class="card summary-card">
-                <div class="card-head compact">
-                    <h2>Transcriber</h2>
-                    <div class="toolbar compact-toolbar">
-                        <button id="refresh-transcriber-button" class="ghost" type="button">Refresh</button>
-                    </div>
-                </div>
-                <div class="summary-grid">
-                    <div class="summary-tile">
-                        <span class="label">Engine</span>
-                        <strong id="transcriber-engine-state">Disabled</strong>
-                    </div>
-                    <div class="summary-tile">
-                        <span class="label">Queue</span>
-                        <strong id="transcriber-queue-state">No jobs</strong>
-                    </div>
-                </div>
-                <div class="progress-stack">
-                    <div>
-                        <div class="progress-head">
-                            <span>Current file</span>
-                            <strong id="transcriber-current-progress-label">0%</strong>
+                    <section class="content-section" aria-labelledby="recorder-overview-title">
+                        <div class="section-heading">
+                            <div><p class="kicker">Current state</p><h2 id="recorder-overview-title">Recorder overview</h2></div>
                         </div>
-                        <div class="progress-bar"><span id="transcriber-current-progress"></span></div>
-                    </div>
-                    <div>
-                        <div class="progress-head">
-                            <span>All jobs</span>
-                            <strong id="transcriber-all-progress-label">No estimate</strong>
+                        <div class="fact-grid">
+                            <button id="open-last-recording-button" class="fact action-fact" type="button">
+                                <span>Last recording</span><strong id="last-recording-name">No recordings yet</strong><small id="last-recording-result">Waiting for a completed call</small>
+                            </button>
+                            <button id="open-output-button" class="fact action-fact" type="button">
+                                <span>Output folder</span><strong id="recorder-output-path">/sdcard/Recordings/BCRHeadless</strong><small id="recorder-output-health">Checking storage</small>
+                            </button>
                         </div>
-                        <div class="progress-bar"><span id="transcriber-all-progress"></span></div>
-                    </div>
-                </div>
-            </article>
-
-            <article class="card">
-                <div class="card-head compact">
-                    <h2>Settings</h2>
-                </div>
-
-                <label class="field toggle-row">
-                    <span>Transcriber enabled</span>
-                    <input id="transcriber-enabled" type="checkbox">
-                </label>
-                <small class="field-help">
-                    Offline transcription using local components.
-                </small>
-
-                <label class="field">
-                    <span>Transcript directory</span>
-                    <input id="transcriber-output-dir" type="text" spellcheck="false">
-                </label>
-
-                <label class="field">
-                    <span>Source language</span>
-                    <select id="transcriber-language">
-                        <option value="en">English</option>
-                        <option value="auto">Auto detect</option>
-                        <option value="es">Spanish</option>
-                        <option value="fr">French</option>
-                        <option value="de">German</option>
-                        <option value="it">Italian</option>
-                        <option value="pt">Portuguese</option>
-                        <option value="pl">Polish</option>
-                        <option value="nl">Dutch</option>
-                        <option value="tr">Turkish</option>
-                        <option value="cs">Czech</option>
-                        <option value="uk">Ukrainian</option>
-                        <option value="ru">Russian</option>
-                        <option value="ar">Arabic</option>
-                        <option value="hi">Hindi</option>
-                        <option value="ja">Japanese</option>
-                        <option value="ko">Korean</option>
-                        <option value="zh">Chinese</option>
-                    </select>
-                    <small>Choose the language spoken in the recording.</small>
-                </label>
-
-                <label class="field">
-                    <span>Your speaker name</span>
-                    <input id="transcriber-speaker-self-name" type="text" spellcheck="false" placeholder="Speaker A">
-                    <small>Name used for your side of the call.</small>
-                </label>
-
-                <label class="field">
-                    <span>Transcript format</span>
-                    <select id="transcriber-output-format">
-                        <option value="txt">Plain text (.txt)</option>
-                        <option value="docx">Word document (.docx)</option>
-                    </select>
-                </label>
-
-                <label class="field toggle-row">
-                    <span>Use your own whisper.cpp CLI package</span>
-                    <input id="transcriber-whisper-local-enabled" type="checkbox">
-                </label>
-                <small class="field-help">
-                    Leave this off to use the recommended package for this device.
-                </small>
-
-                <label id="transcriber-whisper-local-field" class="field" hidden>
-                    <span>Local whisper.cpp CLI package path</span>
-                    <input id="transcriber-whisper-local-path" type="text" spellcheck="false" placeholder="/sdcard/Download/whisper-cli-android-arm64-v8a.zip">
-                    <small id="transcriber-whisper-local-status">Optional. Enter a full path only if you want to use your own whisper.cpp CLI package.</small>
-                </label>
-
-                <label class="field">
-                    <span>Whisper model</span>
-                    <select id="transcriber-model-preset">
-                        <option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin">Base English</option>
-                        <option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin">Base multilingual</option>
-                        <option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin">Small English</option>
-                        <option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin">Small multilingual</option>
-                    </select>
-                    <small>Select the model to use for transcription.</small>
-                </label>
-
-                <label class="field toggle-row">
-                    <span>Use custom Whisper model URL</span>
-                    <input id="transcriber-model-url-enabled" type="checkbox">
-                </label>
-
-                <label id="transcriber-model-url-field" class="field" hidden>
-                    <span>Custom Whisper model URL</span>
-                    <input id="transcriber-model-url" type="text" spellcheck="false" placeholder="https://.../ggml-model.bin">
-                    <small>Optional. Use your own download link instead of the list above.</small>
-                </label>
-
-                <label class="field">
-                    <span>TinyDiarize model</span>
-                    <select id="transcriber-tdrz-preset">
-                        <option value="https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin">Small English TinyDiarize</option>
-                    </select>
-                    <small>Used for mono speaker turns when stereo separation is not available.</small>
-                </label>
-
-                <label class="field toggle-row">
-                    <span>Use custom TinyDiarize model URL</span>
-                    <input id="transcriber-tdrz-url-enabled" type="checkbox">
-                </label>
-
-                <label id="transcriber-tdrz-url-field" class="field" hidden>
-                    <span>Custom TinyDiarize model URL</span>
-                    <input id="transcriber-tdrz-url" type="text" spellcheck="false" placeholder="https://.../ggml-small.en-tdrz.bin">
-                    <small>Optional. Use your own download link instead of the standard option.</small>
-                </label>
-
-                <div class="dependency-list">
-                    <div>
-                        <span class="label">whisper.cpp CLI</span>
-                        <strong id="transcriber-whisper-path">Not checked</strong>
-                        <div class="progress-mini"><span id="component-whisper-progress"></span></div>
-                        <small id="component-whisper-status">Waiting</small>
-                    </div>
-                    <div>
-                        <span class="label">Whisper model</span>
-                        <strong id="transcriber-model-path">Not checked</strong>
-                        <div class="progress-mini"><span id="component-model-progress"></span></div>
-                        <small id="component-model-status">Waiting</small>
-                    </div>
-                    <div>
-                        <span class="label">TinyDiarize model</span>
-                        <strong id="transcriber-tdrz-path">Not checked</strong>
-                        <div class="progress-mini"><span id="component-tdrz-progress"></span></div>
-                        <small id="component-tdrz-status">Waiting</small>
-                    </div>
-                </div>
-
-                <div class="actions">
-                    <button id="save-transcriber-button" type="button">Save Transcriber</button>
-                    <button id="open-transcriber-output-button" class="ghost" type="button">Open Transcript Folder</button>
-                    <button id="install-transcriber-deps-button" class="ghost" type="button">Prepare Components</button>
-                    <button id="remove-transcriber-deps-button" class="ghost danger" type="button">Remove Components</button>
-                </div>
-            </article>
-
-            <article class="card">
-                <div class="card-head">
-                    <h2>Recordings</h2>
-                    <div class="toolbar">
-                        <button id="refresh-recordings-for-transcriber-button" class="ghost" type="button">Refresh</button>
-                        <button id="select-all-recordings-button" class="ghost" type="button">Select All</button>
-                        <button id="clear-recording-selection-button" class="ghost" type="button">Clear</button>
-                    </div>
-                </div>
-                <div id="transcriber-recording-list" class="entry-list selectable-list">
-                    <p class="entry-empty">Loading recordings...</p>
-                </div>
-                <div class="actions">
-                    <button id="queue-selected-button" type="button">Queue Selected</button>
-                </div>
-            </article>
-
-            <article class="card">
-                <div class="card-head">
-                    <h2>Queue</h2>
-                    <div class="toolbar">
-                        <button id="pause-transcriber-button" class="ghost" type="button">Pause</button>
-                        <button id="resume-transcriber-button" class="ghost" type="button">Resume</button>
-                        <button id="stop-transcriber-button" class="ghost danger" type="button">Stop</button>
-                        <button id="clear-transcriber-queue-button" class="ghost" type="button">Clear Done</button>
-                    </div>
-                </div>
-                <div id="transcriber-queue-list" class="entry-list">
-                    <p class="entry-empty">No queued transcription jobs.</p>
-                </div>
-            </article>
-        </section>
-
-        <section id="debug-view" class="view stack" hidden>
-            <article class="card">
-                <div class="card-head">
-                    <h2>Debug Controls</h2>
-                    <div class="toolbar compact-toolbar">
-                        <span id="debug-status-badge" class="badge">Off</span>
-                    </div>
-                </div>
-                <label class="field toggle-row">
-                    <span>Enable debug tracking</span>
-                    <input id="debug-enabled" type="checkbox">
-                </label>
-                <small class="field-help">Turn this on only when you need troubleshooting details.</small>
-                <div class="actions">
-                    <button id="save-debug-button" type="button">Save Debug</button>
-                    <button id="refresh-transcriber-debug-button" class="ghost" type="button">Refresh Transcriber Debug</button>
-                </div>
-            </article>
-
-            <article class="card">
-                <div class="card-head">
-                    <h2>Runtime</h2>
-                    <div class="toolbar">
-                        <span id="runtime-badge" class="badge">Loading</span>
-                        <button id="refresh-button" class="ghost" type="button">Refresh</button>
-                        <button id="restart-button" class="ghost" type="button">Restart Daemon</button>
-                    </div>
-                </div>
-                <pre id="status-output" class="console">Loading module state...</pre>
-            </article>
-
-            <article class="card">
-                <div class="card-head">
-                    <h2>Diagnostics</h2>
-                    <div class="toolbar">
-                        <button id="probe-button" class="ghost" type="button">Run Probe</button>
-                        <button id="logs-button" class="ghost" type="button">Show Logs</button>
-                    </div>
-                </div>
-                <pre id="diagnostic-output" class="console muted">No diagnostics yet.</pre>
-            </article>
-
-            <article class="card">
-                <div class="card-head">
-                    <h2>Transcriber Debug</h2>
-                </div>
-                <div class="debug-grid">
-                    <section>
-                        <h3>Transcriber Status</h3>
-                        <pre id="debug-transcriber-status-output" class="console muted compact-console">Debug tracking is disabled.</pre>
                     </section>
-                    <section>
-                        <h3>Components</h3>
-                        <pre id="debug-components-output" class="console muted compact-console">Debug tracking is disabled.</pre>
-                    </section>
-                    <section>
-                        <h3>Jobs</h3>
-                        <pre id="debug-jobs-output" class="console muted compact-console">Debug tracking is disabled.</pre>
-                    </section>
-                    <section>
-                        <h3>Transcriber Logs</h3>
-                        <pre id="debug-transcriber-logs-output" class="console muted compact-console">Debug tracking is disabled.</pre>
-                    </section>
-                </div>
-            </article>
-        </section>
-    </main>
 
-    <div id="confirm-overlay" class="confirm-overlay" hidden>
-        <div class="confirm-card">
-            <h2>Clear Recording Log</h2>
-            <p>Remove all recorded call history entries from this module?</p>
-            <div class="actions compact-actions">
-                <button id="confirm-clear-button" class="danger" type="button">Clear</button>
-                <button id="cancel-clear-button" class="ghost" type="button">Cancel</button>
-            </div>
+                    <details id="recorder-settings" class="content-section settings-details" aria-labelledby="recorder-settings-title">
+                        <summary>
+                            <span><span data-icon="settings" aria-hidden="true"></span><span><span class="kicker">Configuration</span><strong id="recorder-settings-title">Recorder settings</strong></span></span>
+                            <span data-icon="chevron-down" aria-hidden="true"></span>
+                        </summary>
+                        <div class="details-actions"><button id="reset-recorder-button" class="text-button secondary" type="button"><span data-icon="rotate-ccw" aria-hidden="true"></span>Reset</button></div>
+                        <div class="settings-list">
+                            <label class="setting-row toggle-setting">
+                                <span><strong>Recording</strong><small>Capture supported calls in the background.</small></span>
+                                <input id="recording-enabled" type="checkbox" role="switch">
+                            </label>
+                            <label class="setting-row toggle-setting">
+                                <span><strong>Recording history</strong><small>Keep module-local details for saved calls.</small></span>
+                                <input id="recording-log-enabled" type="checkbox" role="switch">
+                            </label>
+                            <fieldset class="setting-row grouped-setting">
+                                <legend><strong>Capture mode</strong><small id="recording-mode-note">Stereo capability has not been checked.</small></legend>
+                                <div class="segmented-control">
+                                    <label><input type="radio" name="recording-mode" value="stereo" checked><span>Stereo</span></label>
+                                    <label><input type="radio" name="recording-mode" value="mono"><span>Mono fallback</span></label>
+                                </div>
+                            </fieldset>
+                            <label class="setting-row input-setting">
+                                <span><strong>Recording format</strong><small>WAV is the most compatible transcription source.</small></span>
+                                <select id="recording-format">
+                                    <option value="wav">WAV / PCM</option>
+                                    <option value="opus">OGG / Opus</option>
+                                    <option value="aac">M4A / AAC</option>
+                                </select>
+                            </label>
+                            <label class="setting-row input-setting">
+                                <span><strong>Output folder</strong><small>Existing files are never removed by configuration changes.</small></span>
+                                <input id="output-dir" type="text" spellcheck="false" autocomplete="off">
+                            </label>
+                            <label class="setting-row input-setting">
+                                <span><strong>Minimum duration</strong><small>Discard calls shorter than this value.</small></span>
+                                <span class="number-field"><input id="min-duration" type="number" min="0" step="1"><span>sec</span></span>
+                            </label>
+                        </div>
+                    </details>
+                </section>
+
+                <section id="library-view" class="view" role="tabpanel" aria-label="Library" hidden>
+                    <section class="content-section flush-top">
+                        <div class="library-toolbar">
+                            <label class="search-field"><span data-icon="search" aria-hidden="true"></span><input id="library-search" type="search" placeholder="Search recordings" autocomplete="off" aria-label="Search recordings"></label>
+                            <select id="library-transcript-filter" aria-label="Filter by transcript">
+                                <option value="all">All transcripts</option><option value="ready">Has transcript</option><option value="missing">No transcript</option>
+                            </select>
+                            <select id="library-sort" aria-label="Sort recordings">
+                                <option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Filename</option><option value="largest">Largest first</option><option value="smallest">Smallest first</option>
+                            </select>
+                        </div>
+                        <div class="selection-bar" id="library-selection-bar" hidden>
+                            <strong id="library-selection-count">0 selected</strong>
+                            <div>
+                                <button id="library-select-page-button" class="text-button secondary" type="button">Select page</button>
+                                <button id="library-clear-selection-button" class="text-button secondary" type="button">Clear</button>
+                                <button id="library-queue-button" class="text-button" type="button"><span data-icon="list-plus" aria-hidden="true"></span>Queue</button>
+                            </div>
+                        </div>
+                        <div class="list-summary"><span id="library-result-count">Loading recordings</span><button id="open-library-folder-button" class="icon-button" type="button" title="Open recordings folder" aria-label="Open recordings folder"><span data-icon="folder-open" aria-hidden="true"></span></button></div>
+                        <div id="library-list" class="data-list" aria-live="polite"></div>
+                        <div class="pagination">
+                            <button id="library-prev-button" class="text-button secondary" type="button"><span data-icon="chevron-left" aria-hidden="true"></span>Previous</button>
+                            <span id="library-page-label">Page 1</span>
+                            <button id="library-next-button" class="text-button secondary" type="button">Next<span data-icon="chevron-right" aria-hidden="true"></span></button>
+                        </div>
+                    </section>
+                </section>
+
+                <section id="transcribe-view" class="view" role="tabpanel" aria-label="Transcribe" hidden>
+                    <div class="transcriber-summary">
+                        <div><span>Engine</span><strong id="transcriber-engine-state">Checking</strong></div>
+                        <div><span>Queue</span><strong id="transcriber-queue-state">No jobs</strong></div>
+                        <div class="summary-progress">
+                            <span><span id="transcriber-stage">Idle</span><strong id="transcriber-progress-label">0%</strong></span>
+                            <progress id="transcriber-progress" max="100" value="0">0%</progress>
+                            <small id="transcriber-eta">No active estimate</small>
+                        </div>
+                        <div class="queue-controls" aria-label="Queue controls">
+                            <button id="start-queue-button" class="text-button" type="button"><span data-icon="play" aria-hidden="true"></span>Start queue</button>
+                            <button id="pause-queue-button" class="icon-button" type="button" title="Pause queue" aria-label="Pause queue"><span data-icon="pause" aria-hidden="true"></span></button>
+                            <button id="resume-queue-button" class="icon-button" type="button" title="Resume queue" aria-label="Resume queue"><span data-icon="play" aria-hidden="true"></span></button>
+                            <button id="stop-queue-button" class="icon-button danger" type="button" title="Stop current job" aria-label="Stop current job"><span data-icon="square" aria-hidden="true"></span></button>
+                        </div>
+                    </div>
+
+                    <section class="content-section" aria-labelledby="queue-title">
+                        <div class="section-heading">
+                            <div><p class="kicker">Processing</p><h2 id="queue-title">Queue</h2></div>
+                            <button id="clear-completed-button" class="text-button secondary" type="button"><span data-icon="list-x" aria-hidden="true"></span>Clear finished</button>
+                        </div>
+                        <div id="queue-list" class="data-list"></div>
+                    </section>
+
+                    <section class="content-section" aria-labelledby="source-recordings-title">
+                        <div class="section-heading">
+                            <div><p class="kicker">Add jobs</p><h2 id="source-recordings-title">Recordings</h2></div>
+                        </div>
+                        <label class="search-field compact-search"><span data-icon="search" aria-hidden="true"></span><input id="transcriber-search" type="search" placeholder="Search recordings" autocomplete="off" aria-label="Search recordings for transcription"></label>
+                        <div id="transcriber-recording-list" class="data-list compact-list"></div>
+                        <div class="section-footer">
+                            <span id="transcriber-selection-count">0 selected</span>
+                            <div class="footer-actions">
+                                <button id="transcriber-select-page-button" class="text-button secondary" type="button">Select page</button>
+                                <button id="queue-selected-button" class="text-button" type="button"><span data-icon="list-plus" aria-hidden="true"></span>Add selected</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="content-section" aria-labelledby="components-title">
+                        <div class="section-heading">
+                            <div><p class="kicker">Offline engine</p><h2 id="components-title">Components</h2></div>
+                            <button id="prepare-components-button" class="text-button" type="button"><span data-icon="download" aria-hidden="true"></span>Prepare</button>
+                        </div>
+                        <p id="component-compatibility-note" class="section-note">Checking the selected recording mode.</p>
+                        <div id="component-list" class="component-list"></div>
+                    </section>
+
+                    <details class="content-section settings-details">
+                        <summary><span><span data-icon="settings" aria-hidden="true"></span><strong>Transcriber settings</strong></span><span data-icon="chevron-down" aria-hidden="true"></span></summary>
+                        <div class="settings-list details-body">
+                            <label class="setting-row toggle-setting"><span><strong>Transcriber</strong><small>Enable local, offline transcription.</small></span><input id="transcriber-enabled" type="checkbox" role="switch"></label>
+                            <label class="setting-row input-setting"><span><strong>Transcript folder</strong><small>Completed transcript output.</small></span><span class="field-with-action"><input id="transcriber-output-dir" type="text" spellcheck="false"><button id="open-transcript-folder-button" class="icon-button" type="button" title="Open transcript folder" aria-label="Open transcript folder"><span data-icon="folder-open" aria-hidden="true"></span></button></span></label>
+                            <label class="setting-row input-setting"><span><strong>Source language</strong><small>Language spoken in recordings.</small></span><select id="transcriber-language"></select></label>
+                            <label class="setting-row input-setting"><span><strong>Your speaker name</strong><small>Label for the device side of stereo calls.</small></span><input id="transcriber-speaker-self-name" type="text" placeholder="Speaker A"></label>
+                            <label class="setting-row input-setting"><span><strong>Other speaker name</strong><small>Label for the remote side of stereo calls.</small></span><input id="transcriber-speaker-remote-name" type="text" placeholder="Speaker B"></label>
+                            <label class="setting-row input-setting"><span><strong>Transcript format</strong><small>Choose a readable document, subtitle, or structured export.</small></span><select id="transcriber-output-format"><option value="txt">Plain text (.txt)</option><option value="docx">Word document (.docx)</option><option value="srt">SubRip subtitles (.srt)</option><option value="vtt">WebVTT subtitles (.vtt)</option><option value="json">Structured data (.json)</option></select></label>
+                            <label class="setting-row input-setting"><span><strong>Whisper model</strong><small id="model-compatibility-note">Choose an English or multilingual model.</small></span><select id="transcriber-model-preset"><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin">Base English</option><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin">Base multilingual</option><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin">Small English</option><option value="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin">Small multilingual</option></select></label>
+                        </div>
+                    </details>
+                </section>
+
+                <section id="diagnostics-view" class="view" role="tabpanel" aria-label="Diagnostics" hidden>
+                    <section class="content-section" aria-labelledby="diagnostic-controls-title">
+                        <div class="section-heading"><div><p class="kicker">Troubleshooting</p><h2 id="diagnostic-controls-title">Diagnostics</h2></div></div>
+                        <label class="setting-row toggle-setting"><span><strong>Debug tracking</strong><small>Enable only while gathering troubleshooting details.</small></span><input id="debug-enabled" type="checkbox" role="switch"></label>
+                        <div class="diagnostic-actions">
+                            <button id="save-debug-button" class="text-button" type="button">Save setting</button>
+                            <button id="run-probe-button" class="text-button secondary" type="button"><span data-icon="stethoscope" aria-hidden="true"></span>Run probe</button>
+                            <button id="restart-daemon-button" class="text-button secondary" type="button"><span data-icon="refresh-ccw" aria-hidden="true"></span>Restart daemon</button>
+                            <button id="load-logs-button" class="text-button secondary" type="button"><span data-icon="scroll-text" aria-hidden="true"></span>Load logs</button>
+                        </div>
+                    </section>
+                    <details class="content-section diagnostic-details">
+                        <summary>Raw module status</summary><pre id="raw-status-output">Load Diagnostics to view status.</pre>
+                    </details>
+                    <details class="content-section diagnostic-details">
+                        <summary>Transcriber status</summary><pre id="raw-transcriber-output">No transcriber details loaded.</pre>
+                    </details>
+                    <details class="content-section diagnostic-details">
+                        <summary>Component status</summary><pre id="raw-components-output">No component details loaded.</pre>
+                    </details>
+                    <details id="diagnostic-result-details" class="content-section diagnostic-details" hidden>
+                        <summary>Diagnostic output</summary><pre id="diagnostic-output">No diagnostics requested.</pre>
+                    </details>
+                </section>
+            </main>
         </div>
+
+        <nav class="bottom-nav" aria-label="Primary navigation">
+            <button class="nav-item is-active" type="button" data-view-target="recorder"><span data-icon="mic" aria-hidden="true"></span><span>Recorder</span></button>
+            <button class="nav-item" type="button" data-view-target="library"><span data-icon="library" aria-hidden="true"></span><span>Library</span></button>
+            <button class="nav-item" type="button" data-view-target="transcriber"><span data-icon="captions" aria-hidden="true"></span><span>Transcribe</span></button>
+            <button class="nav-item" type="button" data-view-target="diagnostics"><span data-icon="activity" aria-hidden="true"></span><span>Diagnostics</span></button>
+        </nav>
     </div>
 
-    <div id="choice-overlay" class="confirm-overlay" hidden>
-        <div class="confirm-card">
-            <h2 id="choice-title">Confirm</h2>
-            <p id="choice-message"></p>
-            <label id="choice-checkbox-row" class="choice-checkbox" hidden>
-                <input id="choice-checkbox" type="checkbox">
-                <span id="choice-checkbox-label"></span>
-            </label>
-            <div id="choice-actions" class="actions compact-actions"></div>
-        </div>
+    <div id="save-bar" class="save-bar" hidden>
+        <span>Unsaved changes</span>
+        <button id="discard-changes-button" class="text-button secondary" type="button">Discard</button>
+        <button id="save-changes-button" class="text-button" type="button"><span data-icon="save" aria-hidden="true"></span>Save changes</button>
     </div>
 
+    <dialog id="choice-dialog" aria-labelledby="choice-dialog-title">
+        <form method="dialog">
+            <div class="dialog-heading"><h2 id="choice-dialog-title">Confirm</h2><button class="icon-button" value="cancel" aria-label="Close dialog"><span data-icon="x" aria-hidden="true"></span></button></div>
+            <p id="choice-dialog-message"></p>
+            <label id="choice-dialog-checkbox-row" class="dialog-checkbox" hidden><input id="choice-dialog-checkbox" type="checkbox"><span id="choice-dialog-checkbox-label"></span></label>
+            <div id="choice-dialog-actions" class="dialog-actions"></div>
+        </form>
+    </dialog>
+
+    <dialog id="preview-dialog" class="preview-dialog" aria-labelledby="preview-dialog-title">
+        <div class="dialog-heading"><div><p class="kicker">Transcript</p><h2 id="preview-dialog-title">Preview</h2></div><button id="close-preview-button" class="icon-button" type="button" aria-label="Close preview"><span data-icon="x" aria-hidden="true"></span></button></div>
+        <pre id="preview-content">Loading preview...</pre>
+        <div class="dialog-actions"><button id="open-preview-file-button" class="text-button secondary" type="button"><span data-icon="external-link" aria-hidden="true"></span>Open file</button><button id="close-preview-footer-button" class="text-button" type="button">Done</button></div>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
     <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -21,6 +21,9 @@ import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
@@ -39,18 +42,20 @@ object HeadlessTranscriber {
 
     fun run(args: Array<String>) {
         require(args.isNotEmpty()) {
-            "Usage: transcriber [status|list|enqueue|worker|control|prepare-components|refresh-component-metadata|open-transcript] ..."
+            "Usage: transcriber [status|list|library|enqueue|worker|control|prepare-components|refresh-component-metadata|open-transcript|preview] ..."
         }
 
         when (args[0]) {
             "status" -> runStatus(args)
             "list" -> runList(args)
+            "library" -> runLibrary(args)
             "enqueue" -> runEnqueue(args)
             "worker" -> runWorker(args)
             "control" -> runControl(args)
             "prepare-components" -> HeadlessTranscriberComponents.runPrepare(args)
             "refresh-component-metadata" -> HeadlessTranscriberComponents.runRefreshMetadata(args)
             "open-transcript" -> runOpenTranscript(args)
+            "preview" -> runPreview(args)
             else -> throw IllegalArgumentException("Unknown transcriber subcommand: ${args[0]}")
         }
     }
@@ -99,40 +104,121 @@ object HeadlessTranscriber {
         state.ensure()
         transcriptDir.mkdirs()
 
-        val candidates = outputDir.walkTopDown()
-            .onEnter { dir ->
-                dir.canonicalFile != transcriptDir.canonicalFile
-            }
-            .filter { it.isFile && it.extension.lowercase(Locale.ROOT) in AUDIO_EXTENSIONS }
+        val candidates = recordingFiles(outputDir, transcriptDir)
             .sortedByDescending { it.lastModified() }
-            .map { file ->
-                val txt = transcriptPath(transcriptDir, file, TranscriptFormat.Txt)
-                val docx = transcriptPath(transcriptDir, file, TranscriptFormat.Docx)
-
-                RecordingCandidate(
-                    path = file.absolutePath,
-                    name = file.name,
-                    sizeBytes = file.length(),
-                    modifiedAt = Instant.ofEpochMilli(file.lastModified()).toString(),
-                    audioChannels = inspectAudioChannels(file),
-                    transcriptTxtPath = txt.absolutePath,
-                    transcriptDocxPath = docx.absolutePath,
-                    transcriptTxtExists = txt.exists(),
-                    transcriptDocxExists = docx.exists(),
-                    selectedTranscriptExists = when (format) {
-                        TranscriptFormat.Txt -> txt.exists()
-                        TranscriptFormat.Docx -> docx.exists()
-                    },
-                )
-            }
-            .toList()
+            .map { buildRecordingCandidate(transcriptDir, it, format, inspectChannels = true) }
 
         println(JSON.encodeToString(candidates))
     }
 
+    private fun runLibrary(args: Array<String>) {
+        require(args.size >= 11) {
+            "Usage: transcriber library <module_dir> <output_dir> <transcript_dir> <format> <offset> <limit> <search> <transcript_filter> <sort> <channel_filter>"
+        }
+
+        val outputDir = File(args[2])
+        val transcriptDir = File(args[3])
+        val format = TranscriptFormat.from(args[4])
+        val offset = (args[5].toIntOrNull() ?: 0).coerceAtLeast(0)
+        val limit = (args[6].toIntOrNull() ?: 80).coerceIn(1, 250)
+        val search = args[7].trim()
+        val transcriptFilter = args[8].lowercase(Locale.ROOT)
+        val sort = args[9].lowercase(Locale.ROOT)
+        val channelFilter = args[10].lowercase(Locale.ROOT)
+
+        transcriptDir.mkdirs()
+        val matched = recordingFiles(outputDir, transcriptDir)
+            .filter { search.isBlank() || it.name.contains(search, ignoreCase = true) }
+            .filter { file ->
+                val exists = transcriptPath(transcriptDir, file, format).exists()
+                when (transcriptFilter) {
+                    "ready", "with-transcript" -> exists
+                    "missing", "without-transcript" -> !exists
+                    else -> true
+                }
+            }
+            .map { file ->
+                buildRecordingCandidate(
+                    transcriptDir = transcriptDir,
+                    file = file,
+                    format = format,
+                    inspectChannels = channelFilter != "all",
+                )
+            }
+            .filter { candidate ->
+                when (channelFilter) {
+                    "stereo" -> (candidate.audioChannels ?: 0) >= 2
+                    "mono" -> candidate.audioChannels == 1
+                    else -> true
+                }
+            }
+            .let { candidates ->
+                when (sort) {
+                    "oldest" -> candidates.sortedBy { it.modifiedAt }
+                    "name" -> candidates.sortedBy { it.name.lowercase(Locale.ROOT) }
+                    "largest" -> candidates.sortedByDescending { it.sizeBytes }
+                    "smallest" -> candidates.sortedBy { it.sizeBytes }
+                    else -> candidates.sortedByDescending { it.modifiedAt }
+                }
+            }
+
+        val pageItems = matched.drop(offset).take(limit)
+
+        println(
+            JSON.encodeToString(
+                RecordingCandidatePage(
+                    total = matched.size,
+                    offset = offset,
+                    limit = limit,
+                    items = pageItems,
+                    hasMore = offset + pageItems.size < matched.size,
+                ),
+            ),
+        )
+    }
+
+    private fun recordingFiles(outputDir: File, transcriptDir: File): List<File> {
+        if (!outputDir.isDirectory) {
+            return emptyList()
+        }
+
+        val transcriptCanonical = runCatching { transcriptDir.canonicalFile }.getOrElse { transcriptDir.absoluteFile }
+        return outputDir.walkTopDown()
+            .onEnter { dir ->
+                runCatching { dir.canonicalFile != transcriptCanonical }.getOrDefault(true)
+            }
+            .filter { it.isFile && it.extension.lowercase(Locale.ROOT) in AUDIO_EXTENSIONS }
+            .toList()
+    }
+
+    private fun buildRecordingCandidate(
+        transcriptDir: File,
+        file: File,
+        format: TranscriptFormat,
+        inspectChannels: Boolean,
+    ): RecordingCandidate {
+        val txt = transcriptPath(transcriptDir, file, TranscriptFormat.Txt)
+        val docx = transcriptPath(transcriptDir, file, TranscriptFormat.Docx)
+        val selected = transcriptPath(transcriptDir, file, format)
+        return RecordingCandidate(
+            path = file.absolutePath,
+            name = file.name,
+            sizeBytes = file.length(),
+            modifiedAt = Instant.ofEpochMilli(file.lastModified()).toString(),
+            audioChannels = if (inspectChannels) inspectAudioChannels(file) else null,
+            transcriptTxtPath = txt.absolutePath,
+            transcriptDocxPath = docx.absolutePath,
+            transcriptTxtExists = txt.exists(),
+            transcriptDocxExists = docx.exists(),
+            selectedTranscriptPath = selected.absolutePath,
+            selectedTranscriptExists = selected.exists(),
+            audioFormat = file.extension.lowercase(Locale.ROOT),
+        )
+    }
+
     private fun runEnqueue(args: Array<String>) {
-        require(args.size >= 8) {
-            "Usage: transcriber enqueue <module_dir> <transcript_dir> <language> <format> <conflict_policy> <speaker_self_name> <recording>..."
+        require(args.size >= 9) {
+            "Usage: transcriber enqueue <module_dir> <transcript_dir> <language> <format> <conflict_policy> <speaker_self_name> <speaker_remote_name> <recording>..."
         }
 
         val moduleDir = File(args[1])
@@ -141,7 +227,8 @@ object HeadlessTranscriber {
         val format = args[4]
         val conflictPolicy = args[5]
         val speakerSelfName = args[6]
-        val recordings = args.drop(7).map(::File)
+        val speakerRemoteName = args[7]
+        val recordings = args.drop(8).map(::File)
         println(
             JSON.encodeToString(
                 enqueueRecordings(
@@ -151,6 +238,7 @@ object HeadlessTranscriber {
                     formatName = format,
                     conflictPolicyName = conflictPolicy,
                     speakerSelfName = speakerSelfName,
+                    speakerRemoteName = speakerRemoteName,
                     recordings = recordings,
                 ),
             ),
@@ -172,22 +260,17 @@ object HeadlessTranscriber {
         val notifier = TranscriberNotifier(notificationsEnabled)
 
         state.ensure()
+        state.recoverStaleRunningJobs()
         state.stopFile.delete()
-        state.deferFile.delete()
 
         while (true) {
             if (state.stopFile.exists()) {
-                state.runtime.save(TranscriberRuntime(state = "stopped"))
-                return
-            }
-
-            if (state.deferFile.exists()) {
-                state.runtime.save(TranscriberRuntime(state = "waiting_for_charging"))
+                state.runtime.save(TranscriberRuntime(state = "stopped", stage = "stopped"))
                 return
             }
 
             if (state.pauseFile.exists()) {
-                state.runtime.save(TranscriberRuntime(state = "paused"))
+                state.runtime.save(TranscriberRuntime(state = "paused", stage = "paused"))
                 return
             }
 
@@ -211,7 +294,7 @@ object HeadlessTranscriber {
 
     private fun runControl(args: Array<String>) {
         require(args.size >= 3) {
-            "Usage: transcriber control <module_dir> <pause|resume|stop|defer|clear|remove> [job_id]"
+            "Usage: transcriber control <module_dir> <pause|resume|stop|clear|remove|retry|move-up|move-down> [job_id]"
         }
 
         val state = TranscriberState(File(args[1]))
@@ -221,18 +304,15 @@ object HeadlessTranscriber {
         when (command) {
             "pause" -> {
                 state.pauseFile.writeText("1\n")
-                state.deferFile.delete()
-                state.runtime.update { it.copy(state = "paused") }
+                state.runtime.update { it.copy(state = "paused", stage = "paused") }
             }
             "resume" -> {
                 state.pauseFile.delete()
                 state.stopFile.delete()
-                state.deferFile.delete()
-                state.runtime.update { it.copy(state = "resuming") }
+                state.runtime.update { it.copy(state = "resuming", stage = "resuming") }
             }
             "stop" -> {
                 state.stopFile.writeText("1\n")
-                state.deferFile.delete()
                 state.pauseFile.delete()
                 state.queue.update { queue ->
                     queue.copy(
@@ -249,12 +329,7 @@ object HeadlessTranscriber {
                         },
                     )
                 }
-                state.runtime.update { it.copy(state = "stopping") }
-            }
-            "defer" -> {
-                state.deferFile.writeText("1\n")
-                state.pauseFile.delete()
-                state.runtime.update { it.copy(state = "waiting_for_charging") }
+                state.runtime.update { it.copy(state = "stopping", stage = "stopping") }
             }
             "clear" -> {
                 state.queue.update { queue ->
@@ -265,6 +340,36 @@ object HeadlessTranscriber {
                 val id = args.getOrNull(3) ?: throw IllegalArgumentException("Missing job id")
                 state.queue.update { queue ->
                     queue.copy(jobs = queue.jobs.filterNot { it.id == id && it.status != JobStatus.Running.serializedName })
+                }
+            }
+            "retry" -> {
+                val id = args.getOrNull(3) ?: throw IllegalArgumentException("Missing job id")
+                state.queue.replace(id) { job ->
+                    if (job.status == JobStatus.Running.serializedName) {
+                        job
+                    } else {
+                        job.copy(
+                            status = JobStatus.Queued.serializedName,
+                            progress = 0,
+                            startedAt = null,
+                            completedAt = null,
+                            error = null,
+                        )
+                    }
+                }
+            }
+            "move-up", "move-down" -> {
+                val id = args.getOrNull(3) ?: throw IllegalArgumentException("Missing job id")
+                val direction = if (command == "move-up") -1 else 1
+                state.queue.update { queue ->
+                    val jobs = queue.jobs.toMutableList()
+                    val index = jobs.indexOfFirst { it.id == id && it.status == JobStatus.Queued.serializedName }
+                    val target = index + direction
+                    if (index >= 0 && target in jobs.indices && jobs[target].status == JobStatus.Queued.serializedName) {
+                        val moved = jobs.removeAt(index)
+                        jobs.add(target, moved)
+                    }
+                    queue.copy(jobs = jobs)
                 }
             }
             else -> throw IllegalArgumentException("Unknown transcriber control: $command")
@@ -311,6 +416,34 @@ object HeadlessTranscriber {
         }
     }
 
+    private fun runPreview(args: Array<String>) {
+        require(args.size >= 2) {
+            "Usage: transcriber preview <path> [max_chars]"
+        }
+
+        val file = File(args[1])
+        val maxChars = (args.getOrNull(2)?.toIntOrNull() ?: 12_000).coerceIn(500, 30_000)
+        if (!file.isFile) {
+            println(JSON.encodeToString(TranscriptPreview(available = false, error = "Transcript file is missing")))
+            return
+        }
+        if (file.extension.equals("docx", ignoreCase = true)) {
+            println(JSON.encodeToString(TranscriptPreview(available = false, error = "Preview is unavailable for Word documents")))
+            return
+        }
+
+        val fullText = file.readText()
+        println(
+            JSON.encodeToString(
+                TranscriptPreview(
+                    available = true,
+                    text = fullText.take(maxChars),
+                    truncated = fullText.length > maxChars,
+                ),
+            ),
+        )
+    }
+
     internal fun enqueueRecordings(
         moduleDir: File,
         transcriptDir: File,
@@ -318,11 +451,13 @@ object HeadlessTranscriber {
         formatName: String,
         conflictPolicyName: String,
         speakerSelfName: String,
+        speakerRemoteName: String,
         recordings: List<File>,
     ): EnqueueResult {
         val format = TranscriptFormat.from(formatName)
         val conflictPolicy = ConflictPolicy.from(conflictPolicyName)
         val resolvedSpeakerSelfName = normalizeSpeakerName(speakerSelfName)
+        val resolvedSpeakerRemoteName = normalizeSpeakerName(speakerRemoteName, DEFAULT_REMOTE_SPEAKER_NAME)
         val state = TranscriberState(moduleDir)
 
         state.ensure()
@@ -373,6 +508,7 @@ object HeadlessTranscriber {
                 createdAt = Instant.now().toString(),
                 audioChannels = inspectAudioChannels(recording),
                 speakerSelfName = resolvedSpeakerSelfName,
+                speakerRemoteName = resolvedSpeakerRemoteName,
             )
         }
 
@@ -415,13 +551,21 @@ object HeadlessTranscriber {
         val recording = File(job.recordingPath)
         val transcript = File(job.transcriptPath)
         val speakerSelfName = normalizeSpeakerName(job.speakerSelfName.ifBlank { defaultSpeakerSelfName })
+        val speakerRemoteName = normalizeSpeakerName(job.speakerRemoteName, DEFAULT_REMOTE_SPEAKER_NAME)
         var channels = inspectAudioChannels(recording)
+        var activeWorkDir: File? = null
+
+        fun cleanupWork() {
+            activeWorkDir?.deleteRecursively()
+            activeWorkDir = null
+        }
 
         fun fail(message: String) {
             state.queue.replace(job.id) {
                 it.copy(
                     status = JobStatus.Failed.serializedName,
                     progress = 0,
+                    stage = "failed",
                     error = message,
                     completedAt = Instant.now().toString(),
                     audioChannels = channels,
@@ -430,12 +574,14 @@ object HeadlessTranscriber {
             state.runtime.save(
                 TranscriberRuntime(
                     state = "failed",
+                    stage = "failed",
                     activeJobId = job.id,
                     activeFile = recording.absolutePath,
                     error = message,
                 ),
             )
             notifier.showFailure(recording, message)
+            cleanupWork()
         }
 
         if (!recording.isFile) {
@@ -443,7 +589,41 @@ object HeadlessTranscriber {
             return
         }
 
-        val workDir = File(state.workDir, job.id).apply { mkdirs() }
+        if (transcript.exists() && !job.overwrite) {
+            state.queue.replace(job.id) {
+                it.copy(
+                    status = JobStatus.Skipped.serializedName,
+                    progress = 100,
+                    stage = "skipped",
+                    error = "Transcript already exists",
+                    completedAt = Instant.now().toString(),
+                )
+            }
+            return
+        }
+
+        state.queue.replace(job.id) {
+            it.copy(
+                status = JobStatus.Running.serializedName,
+                progress = 0,
+                stage = "preparing",
+                startedAt = startedAt.toString(),
+                error = null,
+            )
+        }
+        state.runtime.save(
+            TranscriberRuntime(
+                state = "running",
+                stage = "preparing",
+                activeJobId = job.id,
+                activeFile = recording.absolutePath,
+                progress = 0,
+            ),
+        )
+
+        val safeWorkId = job.id.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val workDir = File(state.workDir, safeWorkId).apply { mkdirs() }
+        activeWorkDir = workDir
         val preparedRecording = try {
             prepareRecordingForWhisper(recording, workDir)
         } catch (e: Exception) {
@@ -478,25 +658,11 @@ object HeadlessTranscriber {
             fail("Missing Whisper model: ${chosenModel.absolutePath}")
             return
         }
-        if (transcript.exists() && !job.overwrite) {
-            state.queue.replace(job.id) {
-                it.copy(
-                    status = JobStatus.Skipped.serializedName,
-                    progress = 100,
-                    error = "Transcript already exists",
-                    completedAt = Instant.now().toString(),
-                    audioChannels = channels,
-                    diarizationMode = diarization.serializedName,
-                )
-            }
-            return
-        }
-
         state.queue.replace(job.id) {
             it.copy(
                 status = JobStatus.Running.serializedName,
                 progress = 0,
-                startedAt = startedAt.toString(),
+                stage = "transcribing",
                 error = null,
                 audioChannels = channels,
                 diarizationMode = diarization.serializedName,
@@ -505,6 +671,7 @@ object HeadlessTranscriber {
         state.runtime.save(
             TranscriberRuntime(
                 state = "running",
+                stage = "transcribing",
                 activeJobId = job.id,
                 activeFile = recording.absolutePath,
                 progress = 0,
@@ -556,58 +723,76 @@ object HeadlessTranscriber {
 
         val normalized = when (execution) {
             is TranscriptionExecutionResult.Cancelled -> {
-                if (execution.reason == CancellationReason.Deferred) {
+                if (execution.reason == CancellationReason.Paused) {
                     state.queue.replace(job.id) {
                         it.copy(
                             status = JobStatus.Queued.serializedName,
                             progress = 0,
+                            stage = "queued",
                             startedAt = null,
                             completedAt = null,
-                            error = "Waiting for charging",
+                            error = "Paused; processing will restart from the beginning",
                             audioChannels = channels,
                             diarizationMode = diarization.serializedName,
                         )
                     }
                     state.runtime.save(
                         TranscriberRuntime(
-                            state = "waiting_for_charging",
+                            state = "paused",
+                            stage = "paused",
                             activeJobId = job.id,
                             activeFile = recording.absolutePath,
                             progress = 0,
                             diarizationMode = diarization.serializedName,
-                            error = "Waiting for charging",
+                            error = "Paused safely before transcript export",
                         ),
                     )
+                    cleanupWork()
                     return
                 }
 
                 state.queue.replace(job.id) {
                     it.copy(
                         status = JobStatus.Cancelled.serializedName,
+                        stage = "cancelled",
                         error = "Stopped by user",
                         completedAt = Instant.now().toString(),
                     )
                 }
                 notifier.showFailure(recording, "Stopped by user")
+                cleanupWork()
                 return
             }
             is TranscriptionExecutionResult.Failure -> {
                 fail(execution.message)
                 return
             }
-            is TranscriptionExecutionResult.Success -> execution.transcript
+            is TranscriptionExecutionResult.Success -> applyRemoteSpeakerName(execution.transcript, speakerRemoteName)
         }
 
-        transcript.parentFile?.mkdirs()
-        when (TranscriptFormat.from(job.format)) {
-            TranscriptFormat.Txt -> transcript.writeText(normalized.text.trimEnd() + "\n")
-            TranscriptFormat.Docx -> writeDocx(transcript, normalized.text)
+        state.queue.replace(job.id) { it.copy(stage = "exporting", progress = 99) }
+        state.runtime.update { it.copy(stage = "exporting", progress = 99) }
+        try {
+            writeTranscriptAtomically(
+                transcript = transcript,
+                format = TranscriptFormat.from(job.format),
+                job = job,
+                recording = recording,
+                normalized = normalized,
+                speakerSelfName = speakerSelfName,
+                speakerRemoteName = speakerRemoteName,
+                diarization = diarization,
+            )
+        } catch (e: Exception) {
+            fail(e.localizedMessage ?: e.javaClass.simpleName)
+            return
         }
 
         state.queue.replace(job.id) {
             it.copy(
                 status = JobStatus.Succeeded.serializedName,
                 progress = 100,
+                stage = "complete",
                 error = null,
                 completedAt = Instant.now().toString(),
                 transcriptPath = transcript.absolutePath,
@@ -616,6 +801,7 @@ object HeadlessTranscriber {
         state.runtime.save(
             TranscriberRuntime(
                 state = "completed",
+                stage = "complete",
                 activeJobId = job.id,
                 activeFile = recording.absolutePath,
                 progress = 100,
@@ -623,6 +809,7 @@ object HeadlessTranscriber {
             ),
         )
         notifier.showSuccess(recording, transcript)
+        cleanupWork()
     }
 
     private fun buildWhisperCommand(
@@ -932,6 +1119,7 @@ object HeadlessTranscriber {
                         state.runtime.save(
                             TranscriberRuntime(
                                 state = "running",
+                                stage = "transcribing",
                                 activeJobId = job.id,
                                 activeFile = activeFile.absolutePath,
                                 progress = scaledProgress,
@@ -953,7 +1141,7 @@ object HeadlessTranscriber {
         while (true) {
             val cancelReason = when {
                 state.stopFile.exists() -> CancellationReason.Stopped
-                state.deferFile.exists() -> CancellationReason.Deferred
+                state.pauseFile.exists() -> CancellationReason.Paused
                 else -> null
             }
             if (cancelReason != null) {
@@ -1986,13 +2174,220 @@ object HeadlessTranscriber {
         return text.last() in ".!?"
     }
 
-    private fun formatTranscriptTimestamp(totalMs: Long): String {
+    internal fun formatTranscriptTimestamp(totalMs: Long): String {
         val safeMs = totalMs.coerceAtLeast(0)
         val hours = safeMs / 3_600_000
         val minutes = (safeMs % 3_600_000) / 60_000
         val seconds = (safeMs % 60_000) / 1_000
         val millis = safeMs % 1_000
         return "%02d:%02d:%02d.%03d".format(hours, minutes, seconds, millis)
+    }
+
+    private fun applyRemoteSpeakerName(
+        transcript: NormalizedTranscript,
+        speakerRemoteName: String,
+    ): NormalizedTranscript {
+        if (speakerRemoteName == DEFAULT_REMOTE_SPEAKER_NAME) {
+            return transcript
+        }
+
+        val utterances = transcript.utterances.map { utterance ->
+            if (utterance.speaker == DEFAULT_REMOTE_SPEAKER_NAME) {
+                utterance.copy(speaker = speakerRemoteName)
+            } else {
+                utterance
+            }
+        }
+        val text = if (utterances.isNotEmpty()) {
+            formatTranscriptUtterances(utterances)
+        } else {
+            transcript.text.replace(
+                Regex("(?m)^(\\[[^]]+\\]\\s*)?${Regex.escape(DEFAULT_REMOTE_SPEAKER_NAME)}:"),
+            ) { match -> "${match.groups[1]?.value.orEmpty()}$speakerRemoteName:" }
+        }
+        return transcript.copy(text = text, utterances = utterances)
+    }
+
+    private fun transcriptMetadataLines(
+        job: TranscriptionJob,
+        recording: File,
+        speakerSelfName: String,
+        speakerRemoteName: String,
+        diarization: DiarizationMode,
+        generatedAt: String,
+    ): List<String> = listOf(
+        "BCR Headless Transcript",
+        "Recording: ${recording.name}",
+        "Source: ${recording.absolutePath}",
+        "Source size: ${recording.length()} bytes",
+        "Generated: $generatedAt",
+        "Language: ${job.language}",
+        "Diarization: ${diarization.serializedName}",
+        "Speakers: $speakerSelfName, $speakerRemoteName",
+    )
+
+    private fun formatTranscriptDocument(
+        metadataLines: List<String>,
+        transcript: NormalizedTranscript,
+    ): String = buildString {
+        metadataLines.forEach { appendLine(it) }
+        appendLine()
+        append(transcript.text.trim())
+    }.trimEnd()
+
+    internal fun formatSrt(
+        utterances: List<TranscriptUtterance>,
+        metadataLines: List<String> = emptyList(),
+    ): String {
+        val blocks = mutableListOf<String>()
+        if (metadataLines.isNotEmpty()) {
+            blocks += buildString {
+                appendLine(1)
+                appendLine("00:00:00,000 --> 00:00:00,001")
+                append(metadataLines.joinToString("\n"))
+            }.trimEnd()
+        }
+        blocks += utterances.mapIndexed { index, utterance ->
+            buildString {
+                appendLine(index + if (metadataLines.isEmpty()) 1 else 2)
+                append(formatSubtitleTimestamp(utterance.startMs, ','))
+                append(" --> ")
+                appendLine(formatSubtitleTimestamp(utterance.endMs, ','))
+                appendLine("${utterance.speaker}: ${utterance.text}")
+            }.trimEnd()
+        }
+        return blocks.joinToString("\n\n", postfix = if (blocks.isEmpty()) "" else "\n")
+    }
+
+    internal fun formatVtt(
+        utterances: List<TranscriptUtterance>,
+        metadataLines: List<String> = emptyList(),
+    ): String = buildString {
+        appendLine("WEBVTT")
+        appendLine()
+        if (metadataLines.isNotEmpty()) {
+            appendLine("NOTE")
+            metadataLines.forEach { appendLine(it) }
+            appendLine()
+        }
+        utterances.forEach { utterance ->
+            append(formatSubtitleTimestamp(utterance.startMs, '.'))
+            append(" --> ")
+            appendLine(formatSubtitleTimestamp(utterance.endMs, '.'))
+            appendLine("${utterance.speaker}: ${utterance.text}")
+            appendLine()
+        }
+    }
+
+    internal fun formatJsonTranscript(
+        sourceName: String,
+        sourceFile: String,
+        sourceSizeBytes: Long,
+        generatedAt: String,
+        language: String,
+        diarizationMode: String,
+        speakerSelfName: String,
+        speakerRemoteName: String,
+        utterances: List<TranscriptUtterance>,
+        transcriptText: String,
+    ): String = JSON.encodeToString(
+        TranscriptExport(
+            sourceName = sourceName,
+            sourceFile = sourceFile,
+            sourceSizeBytes = sourceSizeBytes,
+            generatedAt = generatedAt,
+            language = language,
+            diarizationMode = diarizationMode,
+            speakerSelfName = speakerSelfName,
+            speakerRemoteName = speakerRemoteName,
+            utterances = utterances,
+            text = transcriptText,
+        ),
+    ) + "\n"
+
+    private fun formatSubtitleTimestamp(totalMs: Long, separator: Char): String =
+        formatTranscriptTimestamp(totalMs).replace('.', separator)
+
+    private fun writeTranscriptAtomically(
+        transcript: File,
+        format: TranscriptFormat,
+        job: TranscriptionJob,
+        recording: File,
+        normalized: NormalizedTranscript,
+        speakerSelfName: String,
+        speakerRemoteName: String,
+        diarization: DiarizationMode,
+    ) {
+        val parent = transcript.parentFile ?: throw IOException("Transcript path has no parent directory")
+        parent.mkdirs()
+        val temporary = File(parent, ".${transcript.name}.${UUID.randomUUID()}.tmp")
+        val generatedAt = Instant.now().toString()
+        val metadataLines = transcriptMetadataLines(
+            job = job,
+            recording = recording,
+            speakerSelfName = speakerSelfName,
+            speakerRemoteName = speakerRemoteName,
+            diarization = diarization,
+            generatedAt = generatedAt,
+        )
+        try {
+            when (format) {
+                TranscriptFormat.Txt -> temporary.writeText(
+                    formatTranscriptDocument(
+                        metadataLines,
+                        normalized,
+                    ) + "\n",
+                )
+                TranscriptFormat.Docx -> writeDocx(
+                    temporary,
+                    formatTranscriptDocument(
+                        metadataLines,
+                        normalized,
+                    ),
+                )
+                TranscriptFormat.Srt -> temporary.writeText(formatSrt(normalized.utterances, metadataLines))
+                TranscriptFormat.Vtt -> temporary.writeText(formatVtt(normalized.utterances, metadataLines))
+                TranscriptFormat.Json -> temporary.writeText(
+                    formatJsonTranscript(
+                        sourceName = recording.name,
+                        sourceFile = recording.absolutePath,
+                        sourceSizeBytes = recording.length(),
+                        generatedAt = generatedAt,
+                        language = job.language,
+                        diarizationMode = diarization.serializedName,
+                        speakerSelfName = speakerSelfName,
+                        speakerRemoteName = speakerRemoteName,
+                        utterances = normalized.utterances,
+                        transcriptText = normalized.text,
+                    ),
+                )
+            }
+
+            try {
+                replaceFileAtomically(temporary, transcript)
+            } catch (e: Exception) {
+                throw IOException("Unable to publish transcript: ${e.localizedMessage ?: e.javaClass.simpleName}", e)
+            }
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    internal fun replaceFileAtomically(source: File, target: File) {
+        try {
+            Files.move(
+                source.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                source.toPath(),
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
     }
 
     private fun mapStereoSpeaker(rawSpeaker: String?, speakerSelfName: String): String? {
@@ -2156,7 +2551,7 @@ object HeadlessTranscriber {
         )
     }
 
-    private fun transcriptPath(transcriptDir: File, recording: File, format: TranscriptFormat): File {
+    internal fun transcriptPath(transcriptDir: File, recording: File, format: TranscriptFormat): File {
         val sanitizedStem = recording.nameWithoutExtension
             .replace(Regex("""[\\/:*?"<>|]"""), "_")
             .ifBlank { "recording" }
@@ -2748,11 +3143,14 @@ object HeadlessTranscriber {
         else -> default
     }
 
-    private fun normalizeSpeakerName(value: String?): String =
+    private fun normalizeSpeakerName(
+        value: String?,
+        fallback: String = DEFAULT_SELF_SPEAKER_NAME,
+    ): String =
         value
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: DEFAULT_SELF_SPEAKER_NAME
+            ?: fallback
 
     private val AUDIO_EXTENSIONS = setOf("wav", "m4a", "ogg", "opus", "aac")
     private val ACTIVE_STATUSES = setOf(JobStatus.Queued.serializedName, JobStatus.Running.serializedName)
@@ -2794,13 +3192,36 @@ object HeadlessTranscriber {
         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"""
 }
 
+private fun writeStateFileAtomically(file: File, contents: String) {
+    file.parentFile?.mkdirs()
+    val temporary = File(file.parentFile, ".${file.name}.${UUID.randomUUID()}.tmp")
+    try {
+        temporary.writeText(contents)
+        HeadlessTranscriber.replaceFileAtomically(temporary, file)
+    } finally {
+        temporary.delete()
+    }
+}
+
+private fun <T> withStateFileLock(file: File, action: () -> T): T {
+    val lockFile = File(file.parentFile, ".${file.name}.lock")
+    lockFile.parentFile?.mkdirs()
+    return RandomAccessFile(lockFile, "rw").use { lock ->
+        val fileLock = lock.channel.lock()
+        try {
+            action()
+        } finally {
+            fileLock.release()
+        }
+    }
+}
+
 private class TranscriberState(moduleDir: File) {
     val stateDir = File(moduleDir, ".state")
     val queueFile = File(stateDir, "transcriber-queue.json")
     val runtimeFile = File(stateDir, "transcriber-runtime.json")
     val pauseFile = File(stateDir, "transcriber.pause")
     val stopFile = File(stateDir, "transcriber.stop")
-    val deferFile = File(stateDir, "transcriber.defer")
     val workDir = File(stateDir, "transcriber-work")
     val queue = TranscriptionQueueStore(queueFile)
     val runtime = TranscriberRuntimeStore(runtimeFile)
@@ -2817,7 +3238,14 @@ private class TranscriberState(moduleDir: File) {
             current.copy(
                 jobs = current.jobs.map { job ->
                     if (job.status == JobStatus.Running.serializedName) {
-                        job.copy(status = JobStatus.Queued.serializedName, progress = 0)
+                        job.copy(
+                            status = JobStatus.Queued.serializedName,
+                            progress = 0,
+                            stage = "queued",
+                            startedAt = null,
+                            completedAt = null,
+                            error = null,
+                        )
                     } else {
                         job
                     }
@@ -2831,7 +3259,11 @@ private class TranscriptionQueueStore(private val file: File) {
     fun ensureExists() {
         file.parentFile?.mkdirs()
         if (!file.exists()) {
-            save(TranscriptionQueue())
+            withStateFileLock(file) {
+                if (!file.exists()) {
+                    save(TranscriptionQueue())
+                }
+            }
         }
     }
 
@@ -2847,9 +3279,17 @@ private class TranscriptionQueueStore(private val file: File) {
 
     @Synchronized
     fun update(transform: (TranscriptionQueue) -> TranscriptionQueue): TranscriptionQueue {
-        val updated = transform(load())
-        save(updated)
-        return updated
+        ensureExists()
+        return withStateFileLock(file) {
+            val current = try {
+                HeadlessTranscriberJson.decodeFromString<TranscriptionQueue>(file.readText())
+            } catch (_: Exception) {
+                TranscriptionQueue()
+            }
+            val updated = transform(current)
+            save(updated)
+            updated
+        }
     }
 
     @Synchronized
@@ -2860,7 +3300,7 @@ private class TranscriptionQueueStore(private val file: File) {
     }
 
     private fun save(queue: TranscriptionQueue) {
-        file.writeText(HeadlessTranscriberJson.encodeToString(queue) + "\n")
+        writeStateFileAtomically(file, HeadlessTranscriberJson.encodeToString(queue) + "\n")
     }
 }
 
@@ -2884,12 +3324,22 @@ private class TranscriberRuntimeStore(private val file: File) {
 
     @Synchronized
     fun save(runtime: TranscriberRuntime) {
-        file.writeText(HeadlessTranscriberJson.encodeToString(runtime) + "\n")
+        withStateFileLock(file) {
+            writeStateFileAtomically(file, HeadlessTranscriberJson.encodeToString(runtime) + "\n")
+        }
     }
 
     @Synchronized
     fun update(transform: (TranscriberRuntime) -> TranscriberRuntime) {
-        save(transform(load()))
+        ensureExists()
+        withStateFileLock(file) {
+            val current = try {
+                HeadlessTranscriberJson.decodeFromString<TranscriberRuntime>(file.readText())
+            } catch (_: Exception) {
+                TranscriberRuntime()
+            }
+            writeStateFileAtomically(file, HeadlessTranscriberJson.encodeToString(transform(current)) + "\n")
+        }
     }
 }
 
@@ -2949,10 +3399,12 @@ data class TranscriptionJob(
     val transcriptPath: String,
     val language: String,
     val speakerSelfName: String = "Speaker A",
+    val speakerRemoteName: String = "Speaker B",
     val format: String,
     val overwrite: Boolean,
     val status: String,
     val progress: Int = 0,
+    val stage: String? = null,
     val createdAt: String,
     val startedAt: String? = null,
     val completedAt: String? = null,
@@ -2964,6 +3416,7 @@ data class TranscriptionJob(
 @Serializable
 data class TranscriberRuntime(
     val state: String = "idle",
+    val stage: String? = null,
     val activeJobId: String? = null,
     val activeFile: String? = null,
     val progress: Int? = null,
@@ -3007,7 +3460,26 @@ data class RecordingCandidate(
     val transcriptDocxPath: String,
     val transcriptTxtExists: Boolean,
     val transcriptDocxExists: Boolean,
+    val selectedTranscriptPath: String = "",
     val selectedTranscriptExists: Boolean,
+    val audioFormat: String = "",
+)
+
+@Serializable
+data class RecordingCandidatePage(
+    val total: Int,
+    val offset: Int,
+    val limit: Int,
+    val items: List<RecordingCandidate>,
+    val hasMore: Boolean,
+)
+
+@Serializable
+data class TranscriptPreview(
+    val available: Boolean,
+    val text: String = "",
+    val truncated: Boolean = false,
+    val error: String? = null,
 )
 
 @Serializable
@@ -3050,7 +3522,7 @@ private sealed interface WhisperPassExecutionResult {
 
 private enum class CancellationReason {
     Stopped,
-    Deferred,
+    Paused,
 }
 
 @Serializable
@@ -3112,10 +3584,25 @@ private data class PendingTranscriptSpan(
     val text: String,
 )
 
-private data class TranscriptUtterance(
+@Serializable
+internal data class TranscriptUtterance(
     val startMs: Long,
     val endMs: Long,
     val speaker: String,
+    val text: String,
+)
+
+@Serializable
+private data class TranscriptExport(
+    val sourceName: String,
+    val sourceFile: String,
+    val sourceSizeBytes: Long,
+    val generatedAt: String,
+    val language: String,
+    val diarizationMode: String,
+    val speakerSelfName: String,
+    val speakerRemoteName: String,
+    val utterances: List<TranscriptUtterance>,
     val text: String,
 )
 
@@ -3191,14 +3678,20 @@ private enum class ConflictPolicy {
     }
 }
 
-private enum class TranscriptFormat(val serializedName: String, val extension: String) {
+internal enum class TranscriptFormat(val serializedName: String, val extension: String) {
     Txt("txt", "txt"),
-    Docx("docx", "docx");
+    Docx("docx", "docx"),
+    Srt("srt", "srt"),
+    Vtt("vtt", "vtt"),
+    Json("json", "json");
 
     companion object {
         fun from(value: String): TranscriptFormat = when (value.lowercase(Locale.ROOT)) {
             "txt" -> Txt
             "docx" -> Docx
+            "srt" -> Srt
+            "vtt" -> Vtt
+            "json" -> Json
             else -> Txt
         }
     }

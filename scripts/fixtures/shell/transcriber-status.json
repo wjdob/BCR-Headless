@@ -1,0 +1,19 @@
+{
+  "dependencies": {
+    "whisperPath": "/module/tools/transcriber/whisper-cli",
+    "whisperExists": true,
+    "whisperExecutable": true,
+    "modelPath": "/module/tools/transcriber/models/ggml-base.en.bin",
+    "modelExists": true,
+    "tinydiarizeModelPath": "/module/tools/transcriber/models/ggml-small.en-tdrz.bin",
+    "tinydiarizeModelExists": true,
+    "readyForStereo": true,
+    "readyForMonoDiarization": true
+  },
+  "outputDir": "/recordings",
+  "transcriptDir": "/recordings/transcripts",
+  "queue": {"jobs": []},
+  "runtime": {"state": "idle", "stage": null},
+  "paused": false,
+  "stopRequested": false
+}
